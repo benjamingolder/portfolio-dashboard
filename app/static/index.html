@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portfolio Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1>Portfolio Dashboard</h1>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item active" id="navOverview" onclick="showOverview()">
+        <span class="nav-icon">&#9632;</span>
+        <span>Gesamtübersicht</span>
+      </a>
+      <div class="nav-divider"></div>
+      <div class="nav-label">Kunden</div>
+      <div id="clientNav"></div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sync-info" id="syncStatus">--</div>
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="triggerSync()">Sync</button>
+        <button class="btn btn-sm" onclick="showSettings()" title="Einstellungen">&#9881;</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="main-content" id="app">
+      <div class="loading"><div class="spinner"></div> Laden...</div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
