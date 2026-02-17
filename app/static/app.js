@@ -8,6 +8,14 @@ let txPage = 0;
 const TX_PER_PAGE = 30;
 let charts = {};
 
+// Finance state
+let financeData = null;
+let financeTransactions = [];
+let finFilter = { search: "", kategorie: "", art: "", konto: "", startDatum: "", endDatum: "" };
+let finSort = { field: "datum", dir: "desc" };
+let finPage = 0;
+const FIN_PER_PAGE = 30;
+
 // ── API ──
 async function fetchJSON(url) {
   const r = await fetch(url);
@@ -15,8 +23,24 @@ async function fetchJSON(url) {
   return r.json();
 }
 
+// ── Sidebar Toggle ──
+function toggleSidebar() {
+  const sidebar = document.getElementById("sidebar");
+  sidebar.classList.toggle("collapsed");
+  document.body.classList.toggle("sidebar-collapsed");
+  localStorage.setItem("sidebarCollapsed", sidebar.classList.contains("collapsed"));
+}
+
+function restoreSidebar() {
+  if (localStorage.getItem("sidebarCollapsed") === "true") {
+    document.getElementById("sidebar").classList.add("collapsed");
+    document.body.classList.add("sidebar-collapsed");
+  }
+}
+
 // ── Init ──
 (async function init() {
+  restoreSidebar();
   await loadOverview();
   updateSyncStatus();
   setInterval(updateSyncStatus, 60000);
@@ -47,8 +71,18 @@ async function showClient(filename) {
   renderClientView();
 }
 
-function switchTab(tab) {
+async function switchTab(tab) {
   currentTab = tab;
+  if (tab === "ausgaben" && !financeData) {
+    document.getElementById("tabContent") && (document.getElementById("tabContent").innerHTML = '<div class="loading"><div class="spinner"></div> Laden...</div>');
+    try {
+      financeData = await fetchJSON("/api/finance/overview");
+      financeTransactions = await fetchJSON("/api/finance/transactions");
+    } catch (e) {
+      document.getElementById("tabContent") && (document.getElementById("tabContent").innerHTML = `<div class="alert alert-error">Fehler: ${esc(e.message)}</div>`);
+      return;
+    }
+  }
   renderClientView();
 }
 
@@ -182,12 +216,12 @@ function renderOverview() {
 // ════════════════════════════════════════
 // CLIENT VIEW
 // ════════════════════════════════════════
-function renderClientView() {
+async function renderClientView() {
   destroyCharts();
   const c = currentClient;
   const tabs = [
     ["uebersicht","Übersicht"],["vermoegen","Vermögen"],["performance","Performance"],
-    ["risiko","Risiko"],["positionen","Positionen"],["transaktionen","Transaktionen"],["dividenden","Dividenden"]
+    ["risiko","Risiko"],["positionen","Positionen"],["transaktionen","Transaktionen"],["dividenden","Dividenden"],["ausgaben","Ausgaben"]
   ];
   document.getElementById("app").innerHTML = `
     <div class="page-header">
@@ -196,8 +230,8 @@ function renderClientView() {
     </div>
     <div class="tabs">${tabs.map(([id,lbl])=>`<div class="tab ${currentTab===id?'active':''}" onclick="switchTab('${id}')">${lbl}</div>`).join("")}</div>
     <div id="tabContent"></div>`;
-  const renderers = {uebersicht:tabOverview,vermoegen:tabVermoegen,performance:tabPerformance,risiko:tabRisiko,positionen:tabPositionen,transaktionen:tabTransaktionen,dividenden:tabDividenden};
-  (renderers[currentTab]||tabOverview)(c);
+  const renderers = {uebersicht:tabOverview,vermoegen:tabVermoegen,performance:tabPerformance,risiko:tabRisiko,positionen:tabPositionen,transaktionen:tabTransaktionen,dividenden:tabDividenden,ausgaben:tabAusgaben};
+  await (renderers[currentTab]||tabOverview)(c);
 }
 
 // ── Tab: Übersicht ──
@@ -370,6 +404,207 @@ function setTxFilter(f) { txFilter = f; txPage = 0; tabTransaktionen(currentClie
 function setTxPage(p) { txPage = p; tabTransaktionen(currentClient); }
 
 // ════════════════════════════════════════
+// AUSGABEN (Haushaltsfinanzen) – als Tab im Kundenbereich
+// ════════════════════════════════════════
+async function tabAusgaben(c) {
+  if (!financeData) {
+    document.getElementById("tabContent").innerHTML = '<div class="loading"><div class="spinner"></div> Laden...</div>';
+    try {
+      financeData = await fetchJSON("/api/finance/overview");
+      financeTransactions = await fetchJSON("/api/finance/transactions");
+    } catch (e) {
+      document.getElementById("tabContent").innerHTML = `<div class="alert alert-error">Fehler: ${esc(e.message)}</div>`;
+      return;
+    }
+  }
+  finFilter = { search: "", kategorie: "", art: "", konto: "", startDatum: "", endDatum: "" };
+  finSort = { field: "datum", dir: "desc" };
+  finPage = 0;
+  renderAusgabenTab();
+}
+
+function renderAusgabenTab() {
+  const s = financeData.summary;
+  document.getElementById("tabContent").innerHTML = `
+    <div class="stats-row">
+      <div class="stat-card"><div class="label">Einnahmen</div><div class="value betrag-pos">${fmtCHF(s.total_einnahmen)}</div></div>
+      <div class="stat-card"><div class="label">Ausgaben</div><div class="value betrag-neg">${fmtCHF(s.total_ausgaben)}</div></div>
+      <div class="stat-card"><div class="label">Saldo</div><div class="value ${s.saldo >= 0 ? 'positive' : 'negative'}">${fmtCHF(s.saldo)}</div></div>
+      <div class="stat-card"><div class="label">Transaktionen</div><div class="value">${s.anzahl_transaktionen}</div></div>
+    </div>
+    <div class="charts-row">
+      <div class="chart-card"><h3>Monatliche Übersicht</h3><canvas id="chFinMonthly"></canvas></div>
+      <div class="chart-card"><h3>Ausgaben nach Kategorie</h3><canvas id="chFinCat"></canvas></div>
+    </div>
+    <div class="chart-card chart-full" style="margin-bottom:1.5rem"><h3>Saldo-Verlauf</h3><canvas id="chFinSaldo"></canvas></div>
+    <div class="table-card">
+      <h3>Transaktionen</h3>
+      <div class="fin-filter-bar">
+        <input type="text" placeholder="Suche..." id="finSearch" oninput="updateFinFilter()">
+        <select id="finKategorie" onchange="updateFinFilter()">
+          <option value="">Alle Kategorien</option>
+          ${financeData.kategorien.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join("")}
+        </select>
+        <select id="finArt" onchange="updateFinFilter()">
+          <option value="">Alle Typen</option>
+          <option value="Belastung">Belastung</option>
+          <option value="Gutschrift">Gutschrift</option>
+        </select>
+        <select id="finKonto" onchange="updateFinFilter()">
+          <option value="">Alle Konten</option>
+          ${financeData.konten.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join("")}
+        </select>
+        <input type="date" id="finStartDatum" onchange="updateFinFilter()">
+        <input type="date" id="finEndDatum" onchange="updateFinFilter()">
+      </div>
+      <div id="finTableContent"></div>
+    </div>`;
+  renderFinCharts();
+  renderFinTable();
+}
+
+function renderFinCharts() {
+  const m = financeData.monthly;
+  const monthNames = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
+  function monthLabel(s) {
+    const [y, mo] = s.split("-");
+    return `${monthNames[parseInt(mo)-1]} ${y}`;
+  }
+  // Monthly bar chart
+  if (m.length) {
+    charts.fm = new Chart(document.getElementById("chFinMonthly"), {
+      type: "bar",
+      data: {
+        labels: m.map(d => monthLabel(d.monat)),
+        datasets: [
+          { label: "Einnahmen", data: m.map(d => d.einnahmen), backgroundColor: "rgba(34,197,94,0.7)" },
+          { label: "Ausgaben", data: m.map(d => d.ausgaben), backgroundColor: "rgba(239,68,68,0.7)" },
+        ],
+      },
+      options: { responsive: true, plugins: { legend: { labels: { color: "#8b8fa3" } } }, scales: { x: { ticks: { color: "#8b8fa3" }, grid: { display: false } }, y: { ticks: { color: "#8b8fa3", callback: v => fmtCHF(v) }, grid: { color: "#2a2e3a" } } } },
+    });
+  }
+  // Category doughnut
+  const c = financeData.categories;
+  if (c.length) {
+    charts.fc = new Chart(document.getElementById("chFinCat"), {
+      type: "doughnut",
+      data: {
+        labels: c.map(d => d.kategorie),
+        datasets: [{ data: c.map(d => d.betrag), backgroundColor: COLORS, borderWidth: 0 }],
+      },
+      options: { responsive: true, plugins: { legend: { position: "right", labels: { color: "#8b8fa3", font: { size: 10 } } } } },
+    });
+  }
+  // Saldo trend line
+  if (m.length) {
+    let cumulative = [];
+    m.reduce((acc, d) => { acc += d.saldo; cumulative.push(acc); return acc; }, 0);
+    charts.fs = new Chart(document.getElementById("chFinSaldo"), {
+      type: "line",
+      data: {
+        labels: m.map(d => monthLabel(d.monat)),
+        datasets: [{
+          label: "Kumulierter Saldo",
+          data: cumulative,
+          borderColor: "#4f8cff",
+          backgroundColor: "rgba(79,140,255,0.08)",
+          fill: true,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+        }],
+      },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: "#8b8fa3", maxTicksLimit: 12 }, grid: { display: false } }, y: { ticks: { color: "#8b8fa3", callback: v => fmtCHF(v) }, grid: { color: "#2a2e3a" } } } },
+    });
+  }
+}
+
+function updateFinFilter() {
+  finFilter.search = (document.getElementById("finSearch")?.value || "").trim();
+  finFilter.kategorie = document.getElementById("finKategorie")?.value || "";
+  finFilter.art = document.getElementById("finArt")?.value || "";
+  finFilter.konto = document.getElementById("finKonto")?.value || "";
+  finFilter.startDatum = document.getElementById("finStartDatum")?.value || "";
+  finFilter.endDatum = document.getElementById("finEndDatum")?.value || "";
+  finPage = 0;
+  renderFinTable();
+}
+
+function getFilteredFinTx() {
+  let txs = financeTransactions;
+  if (finFilter.search) {
+    const s = finFilter.search.toLowerCase();
+    txs = txs.filter(t => (t.titel||"").toLowerCase().includes(s) || (t.empfaenger||"").toLowerCase().includes(s) || (t.detail_beschrieb||"").toLowerCase().includes(s) || (t.kategorie||"").toLowerCase().includes(s));
+  }
+  if (finFilter.kategorie) txs = txs.filter(t => t.kategorie === finFilter.kategorie);
+  if (finFilter.art) txs = txs.filter(t => t.art === finFilter.art);
+  if (finFilter.konto) txs = txs.filter(t => t.konto === finFilter.konto);
+  if (finFilter.startDatum) txs = txs.filter(t => t.datum >= finFilter.startDatum);
+  if (finFilter.endDatum) txs = txs.filter(t => t.datum <= finFilter.endDatum);
+  // Sort
+  const field = finSort.field;
+  const dir = finSort.dir === "desc" ? -1 : 1;
+  txs = [...txs].sort((a, b) => {
+    const va = a[field], vb = b[field];
+    if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+    return String(va || "").localeCompare(String(vb || "")) * dir;
+  });
+  return txs;
+}
+
+function renderFinTable() {
+  const filtered = getFilteredFinTx();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / FIN_PER_PAGE));
+  const paged = filtered.slice(finPage * FIN_PER_PAGE, (finPage + 1) * FIN_PER_PAGE);
+  const sortIcon = (f) => finSort.field === f ? (finSort.dir === "desc" ? " \u25BC" : " \u25B2") : "";
+
+  document.getElementById("finTableContent").innerHTML = `
+    <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">${filtered.length} Transaktion${filtered.length !== 1 ? "en" : ""}</div>
+    <table>
+      <thead><tr>
+        <th class="sortable" onclick="setFinSort('datum')">Datum${sortIcon('datum')}</th>
+        <th class="sortable" onclick="setFinSort('empfaenger')">Empfänger${sortIcon('empfaenger')}</th>
+        <th class="sortable" onclick="setFinSort('kategorie')">Kategorie${sortIcon('kategorie')}</th>
+        <th class="sortable" onclick="setFinSort('art')">Art${sortIcon('art')}</th>
+        <th class="sortable text-right" onclick="setFinSort('betrag')">Betrag${sortIcon('betrag')}</th>
+        <th class="sortable" onclick="setFinSort('konto')">Konto${sortIcon('konto')}</th>
+      </tr></thead>
+      <tbody>${paged.length === 0
+        ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:2rem">Keine Transaktionen gefunden</td></tr>'
+        : paged.map(t => `<tr>
+            <td>${fmtDate(t.datum)}</td>
+            <td title="${esc(t.detail_beschrieb)}">${esc(t.empfaenger || t.titel || "-")}</td>
+            <td><span class="badge badge-other">${esc(t.kategorie)}</span></td>
+            <td>${t.art === "Gutschrift" ? '<span class="badge badge-deposit">Gutschrift</span>' : '<span class="badge badge-sale">Belastung</span>'}</td>
+            <td class="text-right text-mono ${t.art === 'Gutschrift' ? 'betrag-pos' : 'betrag-neg'}">${t.art === 'Belastung' ? '-' : '+'}${fmtCHF(t.betrag)}</td>
+            <td style="color:var(--text-muted)">${esc(t.konto)}</td>
+          </tr>`).join("")}</tbody>
+    </table>
+    ${totalPages > 1 ? `<div class="pagination">
+      ${finPage > 0 ? `<button class="btn btn-sm" onclick="setFinPage(${finPage-1})">\u2190</button>` : ""}
+      <span style="color:var(--text-muted);font-size:0.8rem;padding:0.3rem">Seite ${finPage+1} / ${totalPages}</span>
+      ${finPage < totalPages-1 ? `<button class="btn btn-sm" onclick="setFinPage(${finPage+1})">\u2192</button>` : ""}
+    </div>` : ""}`;
+}
+
+function setFinSort(field) {
+  if (finSort.field === field) {
+    finSort.dir = finSort.dir === "desc" ? "asc" : "desc";
+  } else {
+    finSort.field = field;
+    finSort.dir = field === "datum" ? "desc" : "asc";
+  }
+  renderFinTable();
+}
+
+function setFinPage(p) { finPage = p; renderFinTable(); }
+
+function fmtCHF(n) {
+  return new Intl.NumberFormat("de-CH", { style: "currency", currency: "CHF" }).format(n);
+}
+
+// ════════════════════════════════════════
 // SETTINGS
 // ════════════════════════════════════════
 async function showSettings() {
@@ -435,6 +670,19 @@ function renderSettings(s) {
         </div>
       </div>
       <div class="stat-card" style="margin-bottom:1rem">
+        <h3 style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:1rem">Haushaltsfinanzen</h3>
+        <div class="form-group">
+          <label>Finance Site ID</label>
+          <input type="text" id="settFinanceSite" value="${esc(s.finance_site_id)}" placeholder="SharePoint Site ID für Finanzen-Site">
+          <div class="hint">Site ID der SharePoint-Site mit der Kontobewegungen-Liste</div>
+        </div>
+        <div class="form-group">
+          <label>Listenname</label>
+          <input type="text" id="settFinanceList" value="${esc(s.finance_list_name || 'Kontobewegungen')}" placeholder="Kontobewegungen">
+          <div class="hint">Name der SharePoint-Liste mit den Transaktionen</div>
+        </div>
+      </div>
+      <div class="stat-card" style="margin-bottom:1rem">
         <h3 style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:1rem">Synchronisierung</h3>
         <div class="form-group">
           <label>Sync-Intervall (Sekunden)</label>
@@ -459,6 +707,8 @@ async function saveSettings() {
     sharepoint_site_id: document.getElementById("settSite").value.trim(),
     sharepoint_folder_path: document.getElementById("settFolder").value.trim(),
     sync_interval: Math.max(60, parseInt(document.getElementById("settInterval").value) || 300),
+    finance_site_id: document.getElementById("settFinanceSite").value.trim(),
+    finance_list_name: document.getElementById("settFinanceList").value.trim() || "Kontobewegungen",
   };
   try {
     const resp = await fetch("/api/settings", {

@@ -35,18 +35,42 @@ body {
   left: 0;
   top: 0;
   z-index: 10;
+  transition: transform 0.25s ease;
+}
+
+.sidebar.collapsed {
+  transform: translateX(-100%);
 }
 
 .sidebar-header {
   padding: 1.25rem 1rem;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .sidebar-header h1 {
   font-size: 1rem;
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
 }
+
+.sidebar-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0.2rem;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.sidebar-toggle:hover { color: var(--text); }
 
 .sidebar-nav {
   flex: 1;
@@ -145,7 +169,40 @@ body {
   margin-left: var(--sidebar-w);
   flex: 1;
   min-height: 100vh;
+  transition: margin-left 0.25s ease;
 }
+
+body.sidebar-collapsed .main {
+  margin-left: 0;
+}
+
+body.sidebar-collapsed .main-content {
+  padding-top: 3rem;
+}
+
+.sidebar-open-btn {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 9;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  transition: opacity 0.25s ease, color 0.15s;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.sidebar-collapsed .sidebar-open-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-open-btn:hover { color: var(--text); }
 
 .main-content {
   max-width: 1200px;
@@ -559,6 +616,47 @@ tr:hover td { background: rgba(79, 140, 255, 0.04); }
   background: rgba(139, 143, 163, 0.12);
   color: var(--text-muted);
 }
+
+/* ── Finance Filter Bar ── */
+.fin-filter-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.fin-filter-bar input,
+.fin-filter-bar select {
+  padding: 0.35rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+.fin-filter-bar input:focus,
+.fin-filter-bar select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.fin-filter-bar input[type="text"] { min-width: 160px; }
+.fin-filter-bar input[type="date"] { min-width: 130px; }
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable:hover {
+  color: var(--accent);
+}
+
+.betrag-pos { color: var(--green); }
+.betrag-neg { color: var(--red); }
 
 /* ── Responsive ── */
 @media (max-width: 900px) {

@@ -2,7 +2,7 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 COPY proto/client.proto proto/
-RUN pip install --no-cache-dir grpcio-tools protobuf && \
+RUN pip install --no-cache-dir grpcio-tools protobuf==5.28.2 && \
     mkdir -p app/parser && \
     python -m grpc_tools.protoc --python_out=app/parser --proto_path=proto proto/client.proto
 

@@ -20,6 +20,7 @@ class SyncService:
         self._file_timestamps: dict[str, str] = {}  # filename -> lastModified
         self._on_sync_complete: list = []  # callbacks
         self._sp_settings: SharePointSettings | None = None
+        self.finance_service = None  # set by main.py
 
     def on_sync_complete(self, callback) -> None:
         self._on_sync_complete.append(callback)
@@ -93,34 +94,47 @@ class SyncService:
         data_dir.mkdir(exist_ok=True)
 
         try:
-            files = await self._client.list_portfolio_files(self._sp_settings.sharepoint_folder_path)
-            changed = False
-            for f in files:
-                name = f["name"]
-                last_mod = f["lastModified"]
-                if self._file_timestamps.get(name) == last_mod:
-                    continue
-                logger.info("Downloading %s (modified: %s)", name, last_mod)
-                try:
-                    content = await self._client.download_file(f["id"])
-                    (data_dir / name).write_bytes(content)
-                    self._file_timestamps[name] = last_mod
-                    changed = True
-                except Exception as e:
-                    logger.error("Failed to download %s: %s", name, e)
-                    self.status.errors.append(f"Download failed: {name}: {e}")
-
-            self.status.files_synced = len(self._file_timestamps)
-            self.status.last_sync = datetime.now(timezone.utc)
-
-            if changed:
-                for cb in self._on_sync_complete:
+            try:
+                files = await self._client.list_portfolio_files(self._sp_settings.sharepoint_folder_path)
+                changed = False
+                for f in files:
+                    name = f["name"]
+                    last_mod = f["lastModified"]
+                    if self._file_timestamps.get(name) == last_mod:
+                        continue
+                    logger.info("Downloading %s (modified: %s)", name, last_mod)
                     try:
-                        await cb()
-                    except Exception:
-                        logger.exception("Sync callback error")
-        except Exception as e:
-            logger.error("Sync failed: %s", e)
-            self.status.errors.append(str(e))
+                        content = await self._client.download_file(f["id"])
+                        (data_dir / name).write_bytes(content)
+                        self._file_timestamps[name] = last_mod
+                        changed = True
+                    except Exception as e:
+                        logger.error("Failed to download %s: %s", name, e)
+                        self.status.errors.append(f"Download failed: {name}: {e}")
+
+                self.status.files_synced = len(self._file_timestamps)
+                self.status.last_sync = datetime.now(timezone.utc)
+
+                if changed:
+                    for cb in self._on_sync_complete:
+                        try:
+                            await cb()
+                        except Exception:
+                            logger.exception("Sync callback error")
+            except Exception as e:
+                logger.error("Sync failed: %s", e)
+                self.status.errors.append(str(e))
+
+            # Sync finance data from SharePoint list
+            if self.finance_service and self._sp_settings and self._sp_settings.finance_site_id:
+                try:
+                    await self.finance_service.sync(
+                        client=self._client,
+                        site_id=self._sp_settings.finance_site_id,
+                        list_name=self._sp_settings.finance_list_name or "Kontobewegungen",
+                    )
+                except Exception as e:
+                    logger.error("Finance sync failed: %s", e)
+                    self.status.errors.append(f"Finance: {e}")
         finally:
             self.status.is_syncing = False

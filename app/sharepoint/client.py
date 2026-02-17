@@ -140,5 +140,52 @@ class SharePointClient:
                 ],
             }
 
+    async def get_list_items(
+        self,
+        list_name: str,
+        site_id: str | None = None,
+        select_fields: list[str] | None = None,
+    ) -> list[dict]:
+        """Read all items from a SharePoint list via Graph API with paging."""
+        headers = await self._headers()
+        target_site = site_id or self.site_id
+
+        url = f"{GRAPH_BASE}/sites/{target_site}/lists/{list_name}/items"
+        params: dict[str, str] | None = {"$expand": "fields", "$top": "500"}
+
+        all_items: list[dict] = []
+        while url:
+            resp = await self._http.get(url, headers=headers, params=params)
+            resp.raise_for_status()
+            body = resp.json()
+            for item in body.get("value", []):
+                all_items.append(item.get("fields", {}))
+            url = body.get("@odata.nextLink")
+            params = None  # nextLink already includes params
+
+        return all_items
+
+    async def resolve_site_id(self, hostname: str, site_path: str) -> str:
+        """Resolve a SharePoint site URL to its Graph API site ID."""
+        headers = await self._headers()
+        url = f"{GRAPH_BASE}/sites/{hostname}:/{site_path}"
+        resp = await self._http.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["id"]
+
+    async def list_lists(self, site_id: str | None = None) -> list[dict]:
+        """List all SharePoint lists on a site (including hidden)."""
+        headers = await self._headers()
+        target_site = site_id or self.site_id
+        # Include all lists (including hidden ones) by using a broad filter
+        url = f"{GRAPH_BASE}/sites/{target_site}/lists?$top=100"
+        resp = await self._http.get(url, headers=headers)
+        resp.raise_for_status()
+        return [
+            {"name": lst["name"], "displayName": lst.get("displayName", lst["name"]), "id": lst["id"],
+             "template": lst.get("list", {}).get("template", "")}
+            for lst in resp.json().get("value", [])
+        ]
+
     async def close(self) -> None:
         await self._http.aclose()

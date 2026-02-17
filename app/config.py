@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     base_currency: str = "CHF"
     data_dir: str = "data"
 
+    # CloudFlare Access
+    cf_access_enabled: bool = False
+    cf_access_team_domain: str = ""  # e.g. "golders" for golders.cloudflareaccess.com
+    cf_access_aud: str = ""  # Audience tag from the Access policy
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
@@ -35,6 +40,8 @@ class SharePointSettings(BaseModel):
     sharepoint_folder_path: str = ""
     sync_interval: int = 300
     connected: bool = False
+    finance_site_id: str = ""
+    finance_list_name: str = "Kontobewegungen"
 
 
 def load_sharepoint_settings() -> SharePointSettings:
