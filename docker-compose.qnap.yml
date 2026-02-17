@@ -1,0 +1,15 @@
+services:
+  dashboard:
+    image: ghcr.io/benjamingolder/portfolio-dashboard:latest
+    ports:
+      - "8090:8000"
+    volumes:
+      - dashboard-data:/app/data
+    environment:
+      - BASE_CURRENCY=CHF
+      - SYNC_INTERVAL=300
+      - CF_ACCESS_ENABLED=false
+    restart: unless-stopped
+
+volumes:
+  dashboard-data:
