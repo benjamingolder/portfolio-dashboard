@@ -139,14 +139,12 @@ class SyncService:
                         logger.error("Failed to download %s: %s", name, e)
                         self.status.errors.append(f"Download failed: {name}: {e}")
 
-                # Delete local files that were removed from SharePoint
-                for name in list(self._file_timestamps.keys()):
-                    if name not in sp_names:
-                        local_file = data_dir / name
-                        if local_file.exists():
-                            local_file.unlink()
-                            logger.info("Deleted local file removed from SharePoint: %s", name)
-                        del self._file_timestamps[name]
+                # Delete any local .portfolio file not present in SharePoint
+                for local_file in data_dir.glob("*.portfolio"):
+                    if local_file.name not in sp_names:
+                        local_file.unlink()
+                        self._file_timestamps.pop(local_file.name, None)
+                        logger.info("Deleted local file not in SharePoint: %s", local_file.name)
                         changed = True
 
                 _save_manifest(self._file_timestamps)
