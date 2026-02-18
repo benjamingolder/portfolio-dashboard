@@ -19,6 +19,18 @@ class AggregationService:
     def __init__(self) -> None:
         self.clients: dict[str, ClientPortfolio] = {}
         self.overview: AggregatedOverview = AggregatedOverview()
+        self._loaded_snapshot: set[tuple[str, float]] = set()  # (filename, mtime)
+
+    def _dir_snapshot(self, data_dir: str) -> set[tuple[str, float]]:
+        """Return a set of (filename, mtime) for all .portfolio files on disk."""
+        path = Path(data_dir)
+        if not path.exists():
+            return set()
+        return {(f.name, f.stat().st_mtime) for f in path.glob("*.portfolio")}
+
+    def needs_reload(self, data_dir: str) -> bool:
+        """Return True if the set of portfolio files on disk has changed."""
+        return self._dir_snapshot(data_dir) != self._loaded_snapshot
 
     def load_all(self, data_dir: str) -> None:
         """Load and parse all .portfolio files from the data directory."""
@@ -30,6 +42,9 @@ class AggregationService:
         files = list(path.glob("*.portfolio"))
         if not files:
             logger.info("No .portfolio files found in %s", data_dir)
+            self.clients = {}
+            self._loaded_snapshot = set()
+            self._aggregate()
             return
 
         logger.info("Loading %d portfolio files from %s", len(files), data_dir)
@@ -43,6 +58,7 @@ class AggregationService:
                 logger.exception("Failed to parse %s", f.name)
 
         self.clients = new_clients
+        self._loaded_snapshot = self._dir_snapshot(data_dir)
         self._aggregate()
 
     def _aggregate(self) -> None:

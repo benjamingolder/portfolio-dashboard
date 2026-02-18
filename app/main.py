@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +27,18 @@ async def _on_sync_complete():
     aggregator.load_all(settings.data_dir)
 
 
+async def _watch_data_dir():
+    """Background task: reload portfolios when files are added or removed."""
+    while True:
+        await asyncio.sleep(15)
+        try:
+            if aggregator.needs_reload(settings.data_dir):
+                logger.info("Data directory changed – reloading portfolios")
+                aggregator.load_all(settings.data_dir)
+        except Exception:
+            logger.exception("Error in data directory watcher")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -41,6 +54,9 @@ async def lifespan(app: FastAPI):
     sync_service.on_sync_complete(_on_sync_complete)
     sync_service.start()
 
+    # Watch data directory for file changes (add/remove)
+    watcher_task = asyncio.create_task(_watch_data_dir())
+
     # Wire up routes
     routes.aggregator = aggregator
     routes.finance_service = finance_service
@@ -49,6 +65,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    watcher_task.cancel()
     await sync_service.stop()
 
 
