@@ -96,7 +96,10 @@ class SyncService:
         try:
             try:
                 files = await self._client.list_portfolio_files(self._sp_settings.sharepoint_folder_path)
+                sp_names = {f["name"] for f in files}
                 changed = False
+
+                # Download new or changed files
                 for f in files:
                     name = f["name"]
                     last_mod = f["lastModified"]
@@ -111,6 +114,16 @@ class SyncService:
                     except Exception as e:
                         logger.error("Failed to download %s: %s", name, e)
                         self.status.errors.append(f"Download failed: {name}: {e}")
+
+                # Delete local files that were removed from SharePoint
+                for name in list(self._file_timestamps.keys()):
+                    if name not in sp_names:
+                        local_file = data_dir / name
+                        if local_file.exists():
+                            local_file.unlink()
+                            logger.info("Deleted local file removed from SharePoint: %s", name)
+                        del self._file_timestamps[name]
+                        changed = True
 
                 self.status.files_synced = len(self._file_timestamps)
                 self.status.last_sync = datetime.now(timezone.utc)
