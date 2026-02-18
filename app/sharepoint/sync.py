@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,12 +13,34 @@ from app.sharepoint.client import SharePointClient
 logger = logging.getLogger(__name__)
 
 
+MANIFEST_FILE = Path(settings.data_dir) / ".sp_manifest.json"
+
+
+def _load_manifest() -> dict[str, str]:
+    """Load the persisted SharePoint file manifest from disk."""
+    try:
+        if MANIFEST_FILE.exists():
+            return json.loads(MANIFEST_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_manifest(timestamps: dict[str, str]) -> None:
+    """Persist the SharePoint file manifest to disk."""
+    try:
+        MANIFEST_FILE.parent.mkdir(exist_ok=True)
+        MANIFEST_FILE.write_text(json.dumps(timestamps, indent=2))
+    except Exception as e:
+        logger.warning("Could not save sync manifest: %s", e)
+
+
 class SyncService:
     def __init__(self) -> None:
         self.status = SyncStatus()
         self._client: SharePointClient | None = None
         self._task: asyncio.Task | None = None
-        self._file_timestamps: dict[str, str] = {}  # filename -> lastModified
+        self._file_timestamps: dict[str, str] = _load_manifest()
         self._on_sync_complete: list = []  # callbacks
         self._sp_settings: SharePointSettings | None = None
         self.finance_service = None  # set by main.py
@@ -59,6 +82,7 @@ class SyncService:
         await self.stop()
         self._sp_settings = sp
         self._file_timestamps.clear()
+        _save_manifest(self._file_timestamps)
         if not all([sp.azure_tenant_id, sp.azure_client_id, sp.azure_client_secret]):
             logger.info("SharePoint credentials cleared, sync disabled.")
             self.status.connected = False
@@ -125,6 +149,7 @@ class SyncService:
                         del self._file_timestamps[name]
                         changed = True
 
+                _save_manifest(self._file_timestamps)
                 self.status.files_synced = len(self._file_timestamps)
                 self.status.last_sync = datetime.now(timezone.utc)
 
