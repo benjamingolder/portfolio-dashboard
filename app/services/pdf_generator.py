@@ -185,21 +185,16 @@ def _header(pdf: FPDF, title: str, subtitle: str, date_str: str, logo_path: Path
     pdf.cell(0, 5, subtitle, ln=True)
     pdf.set_font("Helvetica", "", 8)
     pdf.cell(0, 4, f"Berichtsdatum: {date_str}", ln=True)
-    pdf.ln(1)
-    # Blue rule
-    pdf.set_draw_color(*ACCENT)
-    pdf.set_line_width(0.5)
-    pdf.line(LM, pdf.get_y(), LM + W, pdf.get_y())
-    pdf.ln(4)
+    pdf.ln(5)
     pdf.set_draw_color(0, 0, 0)
     pdf.set_line_width(0.2)
 
 
 def _section(pdf: FPDF, title: str):
-    """Draw a section title with blue left border."""
+    """Draw a section title with grey left border."""
     y = pdf.get_y()
-    pdf.set_fill_color(*ACCENT)
-    pdf.rect(LM, y, 2, 5, style="F")
+    pdf.set_fill_color(*MUTED)
+    pdf.rect(LM, y, 1.5, 5, style="F")
     pdf.set_xy(LM + 4, y)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(*DARK)
