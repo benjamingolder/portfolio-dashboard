@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import logging
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 
-from app.config import SharePointSettings, load_sharepoint_settings, save_sharepoint_settings
+from app.config import SharePointSettings, load_sharepoint_settings, save_sharepoint_settings, settings
 from app.models.finance import FinanceOverview, FinanceTransaction
 from app.models.portfolio import AggregatedOverview, ClientPortfolio, SyncStatus, TransactionInfo
 from app.sharepoint.client import SharePointClient
@@ -94,6 +97,10 @@ async def trigger_sync():
 
 # ── Settings API ──
 
+LOGO_DIR = Path("data")
+ALLOWED_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg"}
+
+
 class SettingsResponse(BaseModel):
     azure_tenant_id: str = ""
     azure_client_id: str = ""
@@ -104,6 +111,8 @@ class SettingsResponse(BaseModel):
     connected: bool = False
     finance_site_id: str = ""
     finance_list_name: str = "Kontobewegungen"
+    logo_set: bool = False
+    theme: str = "dark"
 
 
 class SettingsUpdate(BaseModel):
@@ -115,11 +124,13 @@ class SettingsUpdate(BaseModel):
     sync_interval: int = 300
     finance_site_id: str = ""
     finance_list_name: str = "Kontobewegungen"
+    theme: str = "dark"
 
 
 @router.get("/settings")
 async def get_settings() -> SettingsResponse:
     sp = load_sharepoint_settings()
+    logo_set = bool(sp.logo_filename and (LOGO_DIR / sp.logo_filename).exists())
     return SettingsResponse(
         azure_tenant_id=sp.azure_tenant_id,
         azure_client_id=sp.azure_client_id,
@@ -130,6 +141,8 @@ async def get_settings() -> SettingsResponse:
         connected=sp.connected,
         finance_site_id=sp.finance_site_id,
         finance_list_name=sp.finance_list_name,
+        logo_set=logo_set,
+        theme=sp.theme,
     )
 
 
@@ -150,6 +163,8 @@ async def update_settings(update: SettingsUpdate):
         connected=has_creds,
         finance_site_id=update.finance_site_id,
         finance_list_name=update.finance_list_name,
+        logo_filename=current.logo_filename,
+        theme=update.theme,
     )
     save_sharepoint_settings(sp)
 
@@ -282,6 +297,89 @@ async def debug_list(list_name: str = "Kontobewegungen"):
 
     await client.close()
     return results
+
+
+@router.post("/settings/logo")
+async def upload_logo(file: UploadFile = File(...)):
+    """Upload a logo image to be shown on PDF reports."""
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_LOGO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Ungültiges Dateiformat. Erlaubt: {', '.join(ALLOWED_LOGO_EXTENSIONS)}")
+
+    logo_filename = f"report_logo{ext}"
+    logo_path = LOGO_DIR / logo_filename
+    LOGO_DIR.mkdir(exist_ok=True)
+
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:  # 2 MB limit
+        raise HTTPException(status_code=400, detail="Logo darf maximal 2 MB gross sein")
+
+    logo_path.write_bytes(content)
+
+    # Persist filename in settings
+    sp = load_sharepoint_settings()
+    sp.logo_filename = logo_filename
+    save_sharepoint_settings(sp)
+
+    return {"status": "ok", "filename": logo_filename}
+
+
+@router.delete("/settings/logo")
+async def delete_logo():
+    """Remove the report logo."""
+    sp = load_sharepoint_settings()
+    if sp.logo_filename:
+        logo_path = LOGO_DIR / sp.logo_filename
+        if logo_path.exists():
+            logo_path.unlink()
+        sp.logo_filename = ""
+        save_sharepoint_settings(sp)
+    return {"status": "ok"}
+
+
+@router.get("/settings/logo")
+async def get_logo():
+    """Return the stored logo image."""
+    sp = load_sharepoint_settings()
+    if not sp.logo_filename:
+        raise HTTPException(status_code=404, detail="Kein Logo gespeichert")
+    logo_path = LOGO_DIR / sp.logo_filename
+    if not logo_path.exists():
+        raise HTTPException(status_code=404, detail="Logo-Datei nicht gefunden")
+    ext = logo_path.suffix.lower().lstrip(".")
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+            "gif": "image/gif", "svg": "image/svg+xml"}.get(ext, "image/png")
+    return Response(content=logo_path.read_bytes(), media_type=mime)
+
+
+@router.get("/export/{filename}/pdf")
+async def export_client_pdf(filename: str):
+    """Generate and return a PDF report for a single client."""
+    from app.services.pdf_generator import generate_client_pdf
+
+    client = aggregator.get_client(filename)
+    if not client:
+        raise HTTPException(status_code=404, detail=f"Client '{filename}' nicht gefunden")
+
+    sp = load_sharepoint_settings()
+    logo_path: Path | None = None
+    if sp.logo_filename:
+        candidate = LOGO_DIR / sp.logo_filename
+        if candidate.exists():
+            logo_path = candidate
+
+    try:
+        pdf_bytes = generate_client_pdf(client, logo_path)
+    except Exception as e:
+        logger.error("PDF generation failed for %s: %s", filename, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF-Generierung fehlgeschlagen: {e}")
+
+    safe_name = filename.replace(" ", "_").replace("/", "_")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_report.pdf"'},
+    )
 
 
 @router.get("/settings/browse")

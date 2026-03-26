@@ -1,3 +1,32 @@
+// ── Theme helpers ──
+function cTextColor() { return getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim() || '#8b8fa3'; }
+function cGridColor() { return getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#2a2e3a'; }
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("theme", theme);
+  // Update toggle button icon
+  const btn = document.getElementById("themeToggleBtn");
+  if (btn) btn.textContent = theme === "light" ? "☀" : "☾";
+}
+
+async function toggleTheme() {
+  const current = document.documentElement.dataset.theme || "dark";
+  const next = current === "dark" ? "light" : "dark";
+  applyTheme(next);
+  // Persist to server
+  try {
+    const sp = await fetchJSON("/api/settings");
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...sp, azure_client_secret: "", theme: next }),
+    });
+  } catch {}
+  // Re-render charts with new colors
+  if (currentView === "overview") renderOverview();
+  else if (currentView !== "settings") renderClientView();
+}
+
 // ── State ──
 let currentView = "overview"; // "overview" or filename
 let currentTab = "uebersicht";
@@ -41,6 +70,13 @@ function restoreSidebar() {
 // ── Init ──
 (async function init() {
   restoreSidebar();
+  // Sync theme from server (localStorage already applied by index.html inline script)
+  try {
+    const s = await fetchJSON("/api/settings");
+    if (s.theme && s.theme !== (localStorage.getItem("theme") || "dark")) {
+      applyTheme(s.theme);
+    }
+  } catch {}
   await loadOverview();
   updateSyncStatus();
   setInterval(updateSyncStatus, 60000);
@@ -205,11 +241,11 @@ function renderOverview() {
     </div>`;
   // Charts
   if (d.top_holdings.length) {
-    charts.h = new Chart(document.getElementById("chHoldings"), {type:"doughnut",data:{labels:d.top_holdings.slice(0,10).map(h=>truncate(h.security.name,22)),datasets:[{data:d.top_holdings.slice(0,10).map(h=>h.current_value),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:"#8b8fa3",font:{size:10}}}}}});
+    charts.h = new Chart(document.getElementById("chHoldings"), {type:"doughnut",data:{labels:d.top_holdings.slice(0,10).map(h=>truncate(h.security.name,22)),datasets:[{data:d.top_holdings.slice(0,10).map(h=>h.current_value),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:cTextColor(),font:{size:10}}}}}});
   }
   const cur = Object.entries(d.currency_breakdown);
   if (cur.length) {
-    charts.c = new Chart(document.getElementById("chCurrency"), {type:"doughnut",data:{labels:cur.map(([k])=>k),datasets:[{data:cur.map(([,v])=>v),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:"#8b8fa3",font:{size:10}}}}}});
+    charts.c = new Chart(document.getElementById("chCurrency"), {type:"doughnut",data:{labels:cur.map(([k])=>k),datasets:[{data:cur.map(([,v])=>v),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:cTextColor(),font:{size:10}}}}}});
   }
 }
 
@@ -224,9 +260,14 @@ async function renderClientView() {
     ["risiko","Risiko"],["positionen","Positionen"],["transaktionen","Transaktionen"],["dividenden","Dividenden"],["ausgaben","Ausgaben"]
   ];
   document.getElementById("app").innerHTML = `
-    <div class="page-header">
-      <h2>${esc(c.client_name)}</h2>
-      <div class="subtitle">${esc(c.filename)} &middot; ${esc(c.base_currency)}</div>
+    <div class="page-header-row">
+      <div class="page-header">
+        <h2>${esc(c.client_name)}</h2>
+        <div class="subtitle">${esc(c.filename)} &middot; ${esc(c.base_currency)}</div>
+      </div>
+      <button class="btn-export" id="pdfExportBtn" onclick="exportPDF('${esc(c.filename)}')">
+        &#128462; PDF Export
+      </button>
     </div>
     <div class="tabs">${tabs.map(([id,lbl])=>`<div class="tab ${currentTab===id?'active':''}" onclick="switchTab('${id}')">${lbl}</div>`).join("")}</div>
     <div id="tabContent"></div>`;
@@ -254,10 +295,10 @@ function tabOverview(c) {
       <tbody>${c.recent_transactions.slice(0,10).map(t=>`<tr><td>${fmtDate(t.date)}</td><td>${txBadge(t.type)}</td><td>${esc(t.security_name||"-")}</td><td class="text-right text-mono">${fmt(t.amount)} ${esc(t.currency)}</td></tr>`).join("")}</tbody></table>
     </div>`;
   if (c.holdings.length) {
-    charts.oh = new Chart(document.getElementById("chOvHoldings"),{type:"doughnut",data:{labels:c.holdings.slice(0,10).map(h=>truncate(h.security.name,20)),datasets:[{data:c.holdings.slice(0,10).map(h=>h.current_value),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:"#8b8fa3",font:{size:10}}}}}});
+    charts.oh = new Chart(document.getElementById("chOvHoldings"),{type:"doughnut",data:{labels:c.holdings.slice(0,10).map(h=>truncate(h.security.name,20)),datasets:[{data:c.holdings.slice(0,10).map(h=>h.current_value),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:cTextColor(),font:{size:10}}}}}});
   }
   if (c.asset_allocation.length) {
-    charts.oa = new Chart(document.getElementById("chOvAlloc"),{type:"doughnut",data:{labels:c.asset_allocation.map(a=>a.name),datasets:[{data:c.asset_allocation.map(a=>a.value),backgroundColor:c.asset_allocation.map(a=>a.color||COLORS[0]),borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:"#8b8fa3",font:{size:10}}}}}});
+    charts.oa = new Chart(document.getElementById("chOvAlloc"),{type:"doughnut",data:{labels:c.asset_allocation.map(a=>a.name),datasets:[{data:c.asset_allocation.map(a=>a.value),backgroundColor:c.asset_allocation.map(a=>a.color||COLORS[0]),borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:cTextColor(),font:{size:10}}}}}});
   }
 }
 
@@ -286,11 +327,11 @@ function tabVermoegen(c) {
       <tbody>${cashAccounts.map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(a.currency)}</td><td class="text-right text-mono">${fmt(a.balance)}</td></tr>`).join("")}</tbody></table>
     </div>` : ""}`;
   if (c.asset_allocation.length) {
-    charts.al = new Chart(document.getElementById("chAlloc"),{type:"doughnut",data:{labels:c.asset_allocation.map(a=>a.name),datasets:[{data:c.asset_allocation.map(a=>a.value),backgroundColor:c.asset_allocation.map(a=>a.color),borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:"#8b8fa3",font:{size:11}}}}}});
+    charts.al = new Chart(document.getElementById("chAlloc"),{type:"doughnut",data:{labels:c.asset_allocation.map(a=>a.name),datasets:[{data:c.asset_allocation.map(a=>a.value),backgroundColor:c.asset_allocation.map(a=>a.color),borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:cTextColor(),font:{size:11}}}}}});
   }
   const cur = Object.entries(c.currency_breakdown);
   if (cur.length) {
-    charts.cu = new Chart(document.getElementById("chCurr"),{type:"doughnut",data:{labels:cur.map(([k])=>k),datasets:[{data:cur.map(([,v])=>v),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:"#8b8fa3",font:{size:11}}}}}});
+    charts.cu = new Chart(document.getElementById("chCurr"),{type:"doughnut",data:{labels:cur.map(([k])=>k),datasets:[{data:cur.map(([,v])=>v),backgroundColor:COLORS,borderWidth:0}]},options:{responsive:true,plugins:{legend:{position:"right",labels:{color:cTextColor(),font:{size:11}}}}}});
   }
 }
 
@@ -310,7 +351,7 @@ function tabPerformance(c) {
     ${c.monthly_returns.length ? `<div class="chart-card chart-full" style="margin-bottom:1rem"><h3>Monatliche Renditen (Heatmap)</h3><div id="heatmap"></div></div>` : ""}`;
   // Performance chart
   if (c.value_history.length) {
-    charts.pf = new Chart(document.getElementById("chPerf"),{type:"line",data:{labels:c.value_history.map(v=>v.date),datasets:[{label:"Portfoliowert",data:c.value_history.map(v=>v.value),borderColor:"#4f8cff",backgroundColor:"rgba(79,140,255,0.08)",fill:true,borderWidth:1.5,pointRadius:0,tension:0.3}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#8b8fa3",maxTicksLimit:12,font:{size:10}},grid:{display:false}},y:{ticks:{color:"#8b8fa3",callback:v=>fmt(v,0)},grid:{color:"#2a2e3a"}}}}});
+    charts.pf = new Chart(document.getElementById("chPerf"),{type:"line",data:{labels:c.value_history.map(v=>v.date),datasets:[{label:"Portfoliowert",data:c.value_history.map(v=>v.value),borderColor:"#4f8cff",backgroundColor:"rgba(79,140,255,0.08)",fill:true,borderWidth:1.5,pointRadius:0,tension:0.3}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:cTextColor(),maxTicksLimit:12,font:{size:10}},grid:{display:false}},y:{ticks:{color:cTextColor(),callback:v=>fmt(v,0)},grid:{color:cGridColor()}}}}});
   }
   // Heatmap
   if (c.monthly_returns.length) renderHeatmap(c.monthly_returns);
@@ -359,7 +400,7 @@ function tabRisiko(c) {
       <tbody>${holdingsWithRisk.map(h=>`<tr><td>${esc(h.security.name)}</td><td style="color:var(--text-muted)">${esc(h.category)}</td><td class="text-right text-mono">${fmt(h.current_value)}</td><td class="text-right text-mono">${fmt(h.volatility,1)}%</td><td class="text-right text-mono ${changeClass(h.annual_return)}">${fmtPct(h.annual_return)}</td><td class="text-right text-mono ${changeClass(h.gain_loss_pct)}">${fmtPct(h.gain_loss_pct)}</td></tr>`).join("")}</tbody></table>
     </div>`;
   if (holdingsWithRisk.length) {
-    charts.rk = new Chart(document.getElementById("chRisk"),{type:"scatter",data:{datasets:[{label:"Positionen",data:holdingsWithRisk.map(h=>({x:h.volatility,y:h.annual_return,r:Math.max(4,Math.min(20,h.current_value/c.total_value*80)),label:h.security.name})),backgroundColor:"rgba(79,140,255,0.5)",borderColor:"#4f8cff",pointRadius:holdingsWithRisk.map(h=>Math.max(4,Math.min(16,h.current_value/c.total_value*60)))}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>{const h=holdingsWithRisk[ctx.dataIndex];return `${h.security.name}: Vol ${fmt(h.volatility,1)}%, Rendite ${fmtPct(h.annual_return)}`;}}}},scales:{x:{title:{display:true,text:"Volatilität (%)",color:"#8b8fa3"},ticks:{color:"#8b8fa3"},grid:{color:"#2a2e3a"}},y:{title:{display:true,text:"Rendite p.a. (%)",color:"#8b8fa3"},ticks:{color:"#8b8fa3"},grid:{color:"#2a2e3a"}}}}});
+    charts.rk = new Chart(document.getElementById("chRisk"),{type:"scatter",data:{datasets:[{label:"Positionen",data:holdingsWithRisk.map(h=>({x:h.volatility,y:h.annual_return,r:Math.max(4,Math.min(20,h.current_value/c.total_value*80)),label:h.security.name})),backgroundColor:"rgba(79,140,255,0.5)",borderColor:"#4f8cff",pointRadius:holdingsWithRisk.map(h=>Math.max(4,Math.min(16,h.current_value/c.total_value*60)))}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>{const h=holdingsWithRisk[ctx.dataIndex];return `${h.security.name}: Vol ${fmt(h.volatility,1)}%, Rendite ${fmtPct(h.annual_return)}`;}}}},scales:{x:{title:{display:true,text:"Volatilität (%)",color:cTextColor()},ticks:{color:cTextColor()},grid:{color:cGridColor()}},y:{title:{display:true,text:"Rendite p.a. (%)",color:cTextColor()},ticks:{color:cTextColor()},grid:{color:cGridColor()}}}}});
   }
 }
 
@@ -374,7 +415,7 @@ function tabPositionen(c) {
       </tbody></table>
     </div>`;
   if (c.holdings.length) {
-    charts.ps = new Chart(document.getElementById("chPos"),{type:"bar",data:{labels:c.holdings.map(h=>truncate(h.security.name,18)),datasets:[{label:"Wert",data:c.holdings.map(h=>h.current_value),backgroundColor:"#4f8cff"},{label:"Investiert",data:c.holdings.map(h=>h.invested),backgroundColor:"#2a2e3a"}]},options:{responsive:true,indexAxis:"y",plugins:{legend:{labels:{color:"#8b8fa3"}}},scales:{x:{ticks:{color:"#8b8fa3"},grid:{color:"#2a2e3a"}},y:{ticks:{color:"#8b8fa3",font:{size:10}},grid:{display:false}}}}});
+    charts.ps = new Chart(document.getElementById("chPos"),{type:"bar",data:{labels:c.holdings.map(h=>truncate(h.security.name,18)),datasets:[{label:"Wert",data:c.holdings.map(h=>h.current_value),backgroundColor:"#4f8cff"},{label:"Investiert",data:c.holdings.map(h=>h.invested),backgroundColor:"#2a2e3a"}]},options:{responsive:true,indexAxis:"y",plugins:{legend:{labels:{color:cTextColor()}}},scales:{x:{ticks:{color:cTextColor()},grid:{color:cGridColor()}},y:{ticks:{color:cTextColor(),font:{size:10}},grid:{display:false}}}}});
   }
 }
 
@@ -605,6 +646,32 @@ function fmtCHF(n) {
 }
 
 // ════════════════════════════════════════
+// PDF EXPORT
+// ════════════════════════════════════════
+async function exportPDF(filename) {
+  const btn = document.getElementById("pdfExportBtn");
+  if (btn) { btn.classList.add("loading"); btn.textContent = "⏳ Wird erstellt..."; }
+  try {
+    const resp = await fetch(`/api/export/${encodeURIComponent(filename)}/pdf`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: "Unbekannter Fehler" }));
+      throw new Error(err.detail || "PDF-Generierung fehlgeschlagen");
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${filename.replace(/\s+/g, "_")}_report.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert(`Fehler beim PDF-Export: ${e.message}`);
+  } finally {
+    if (btn) { btn.classList.remove("loading"); btn.innerHTML = "&#128462; PDF Export"; }
+  }
+}
+
+// ════════════════════════════════════════
 // SETTINGS
 // ════════════════════════════════════════
 async function showSettings() {
@@ -621,10 +688,15 @@ async function showSettings() {
 }
 
 function renderSettings(s) {
+  const logoPreview = s.logo_set
+    ? `<img class="logo-preview" src="/api/settings/logo?t=${Date.now()}" alt="Logo">`
+    : `<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem">Kein Logo hinterlegt</div>`;
+  const isDark = (s.theme || "dark") === "dark";
+
   document.getElementById("app").innerHTML = `
     <div class="page-header">
       <h2>Einstellungen</h2>
-      <div class="subtitle">SharePoint-Verbindung konfigurieren</div>
+      <div class="subtitle">Dashboard konfigurieren</div>
     </div>
     <div id="settingsAlert"></div>
     <div class="stat-card" style="margin-bottom:1.5rem;display:flex;align-items:center;justify-content:space-between">
@@ -638,6 +710,34 @@ function renderSettings(s) {
       <button class="btn btn-sm" onclick="testConnection()">Verbindung testen</button>
     </div>
     <div class="settings-form">
+
+      <div class="stat-card" style="margin-bottom:1rem">
+        <h3 style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:1rem">Erscheinungsbild</h3>
+        <div class="form-group">
+          <label>Farbschema</label>
+          <div style="display:flex;gap:0.75rem;margin-top:0.25rem">
+            <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;text-transform:none;font-size:0.85rem;color:var(--text)">
+              <input type="radio" name="theme" value="dark" ${isDark ? 'checked' : ''} onchange="previewTheme('dark')">
+              &#9789; Dark Mode
+            </label>
+            <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;text-transform:none;font-size:0.85rem;color:var(--text)">
+              <input type="radio" name="theme" value="light" ${!isDark ? 'checked' : ''} onchange="previewTheme('light')">
+              &#9728; Light Mode
+            </label>
+          </div>
+          <div class="hint">Das Farbschema wird sofort angewendet und beim Speichern gesichert.</div>
+        </div>
+        <div class="form-group">
+          <label>Logo für PDF-Berichte</label>
+          <div class="logo-upload-area" onclick="document.getElementById('logoFileInput').click()" id="logoDropArea">
+            ${logoPreview}
+            <div style="font-size:0.78rem;color:var(--text-muted)">Klicken zum Hochladen (PNG, JPG, SVG · max. 2 MB)</div>
+          </div>
+          <input type="file" id="logoFileInput" accept=".png,.jpg,.jpeg,.gif,.svg" style="display:none" onchange="uploadLogo(this)">
+          ${s.logo_set ? `<button class="btn btn-sm" style="margin-top:0.5rem;color:var(--red)" onclick="deleteLogo()">Logo entfernen</button>` : ""}
+        </div>
+      </div>
+
       <div class="stat-card" style="margin-bottom:1rem">
         <h3 style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:1rem">Azure AD / Entra ID</h3>
         <div class="form-group">
@@ -697,9 +797,47 @@ function renderSettings(s) {
     </div>`;
 }
 
+function previewTheme(theme) {
+  applyTheme(theme);
+}
+
+async function uploadLogo(input) {
+  if (!input.files || !input.files[0]) return;
+  const alertEl = document.getElementById("settingsAlert");
+  alertEl.innerHTML = '<div class="alert alert-info">Logo wird hochgeladen...</div>';
+  const formData = new FormData();
+  formData.append("file", input.files[0]);
+  try {
+    const resp = await fetch("/api/settings/logo", { method: "POST", body: formData });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || "Upload fehlgeschlagen");
+    }
+    alertEl.innerHTML = '<div class="alert alert-success">Logo erfolgreich hochgeladen.</div>';
+    const s = await fetchJSON("/api/settings");
+    renderSettings(s);
+  } catch (e) {
+    alertEl.innerHTML = `<div class="alert alert-error">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+async function deleteLogo() {
+  if (!confirm("Logo wirklich entfernen?")) return;
+  const alertEl = document.getElementById("settingsAlert");
+  try {
+    await fetch("/api/settings/logo", { method: "DELETE" });
+    alertEl.innerHTML = '<div class="alert alert-success">Logo entfernt.</div>';
+    const s = await fetchJSON("/api/settings");
+    renderSettings(s);
+  } catch (e) {
+    alertEl.innerHTML = `<div class="alert alert-error">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
 async function saveSettings() {
   const alertEl = document.getElementById("settingsAlert");
   alertEl.innerHTML = "";
+  const selectedTheme = document.querySelector('input[name="theme"]:checked')?.value || "dark";
   const data = {
     azure_tenant_id: document.getElementById("settTenant").value.trim(),
     azure_client_id: document.getElementById("settClient").value.trim(),
@@ -709,6 +847,7 @@ async function saveSettings() {
     sync_interval: Math.max(60, parseInt(document.getElementById("settInterval").value) || 300),
     finance_site_id: document.getElementById("settFinanceSite").value.trim(),
     finance_list_name: document.getElementById("settFinanceList").value.trim() || "Kontobewegungen",
+    theme: selectedTheme,
   };
   try {
     const resp = await fetch("/api/settings", {
@@ -773,9 +912,9 @@ function tabDividenden(c) {
     </div>`;
   if (years.length) {
     const yrs = years.reverse();
-    charts.dy = new Chart(document.getElementById("chDivYear"),{type:"bar",data:{labels:yrs.map(([y])=>y),datasets:[{label:"Dividenden",data:yrs.map(([,a])=>a),backgroundColor:"#22c55e"}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#8b8fa3"},grid:{display:false}},y:{ticks:{color:"#8b8fa3",callback:v=>fmt(v,0)},grid:{color:"#2a2e3a"}}}}});
+    charts.dy = new Chart(document.getElementById("chDivYear"),{type:"bar",data:{labels:yrs.map(([y])=>y),datasets:[{label:"Dividenden",data:yrs.map(([,a])=>a),backgroundColor:"#22c55e"}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:cTextColor()},grid:{display:false}},y:{ticks:{color:cTextColor(),callback:v=>fmt(v,0)},grid:{color:cGridColor()}}}}});
   }
   if (securities.length) {
-    charts.ds = new Chart(document.getElementById("chDivSec"),{type:"bar",data:{labels:securities.slice(0,10).map(([n])=>truncate(n,18)),datasets:[{label:"Dividenden",data:securities.slice(0,10).map(([,a])=>a),backgroundColor:"#22c55e"}]},options:{responsive:true,indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{ticks:{color:"#8b8fa3"},grid:{color:"#2a2e3a"}},y:{ticks:{color:"#8b8fa3",font:{size:10}},grid:{display:false}}}}});
+    charts.ds = new Chart(document.getElementById("chDivSec"),{type:"bar",data:{labels:securities.slice(0,10).map(([n])=>truncate(n,18)),datasets:[{label:"Dividenden",data:securities.slice(0,10).map(([,a])=>a),backgroundColor:"#22c55e"}]},options:{responsive:true,indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{ticks:{color:cTextColor()},grid:{color:cGridColor()}},y:{ticks:{color:cTextColor(),font:{size:10}},grid:{display:false}}}}});
   }
 }

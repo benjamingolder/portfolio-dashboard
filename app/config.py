@@ -42,6 +42,8 @@ class SharePointSettings(BaseModel):
     connected: bool = False
     finance_site_id: str = ""
     finance_list_name: str = "Kontobewegungen"
+    logo_filename: str = ""
+    theme: str = "dark"
 
 
 def load_sharepoint_settings() -> SharePointSettings:

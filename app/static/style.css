@@ -12,6 +12,19 @@
   --sidebar-w: 260px;
 }
 
+html[data-theme="light"] {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --card-hover: #f8fafc;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+  --green: #16a34a;
+  --red: #dc2626;
+  --yellow: #ca8a04;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
@@ -657,6 +670,59 @@ th.sortable:hover {
 
 .betrag-pos { color: var(--green); }
 .betrag-neg { color: var(--red); }
+
+/* ── Theme toggle button ── */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0.25rem 0.45rem;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--accent); }
+
+/* ── Logo upload area ── */
+.logo-upload-area {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.logo-upload-area:hover { border-color: var(--accent); }
+.logo-preview { max-height: 60px; max-width: 200px; object-fit: contain; margin-bottom: 0.5rem; }
+
+/* ── Export button ── */
+.btn-export {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.65rem;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.btn-export:hover { border-color: var(--accent); color: var(--accent); }
+.btn-export.loading { opacity: 0.6; pointer-events: none; }
+
+/* ── Page header actions ── */
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.page-header-row .page-header { margin-bottom: 0; }
 
 /* ── Responsive ── */
 @media (max-width: 900px) {
