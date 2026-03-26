@@ -709,6 +709,9 @@ th.sortable:hover {
   transition: all 0.15s;
   display: inline-flex;
   align-items: center;
+  align-self: flex-start;
+  flex-shrink: 0;
+  white-space: nowrap;
   gap: 0.3rem;
 }
 .btn-export:hover { border-color: var(--accent); color: var(--accent); }
