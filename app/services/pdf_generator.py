@@ -238,16 +238,17 @@ def _stat_box(pdf: FPDF, x: float, y: float, w: float, label: str, value: str,
 def _stats_grid(pdf: FPDF, items: list[dict]):
     """Draw a 3-column grid of stat boxes."""
     bw = (W - 4) / 3  # box width
+    row_y = pdf.get_y()
     for i, item in enumerate(items):
         col = i % 3
         if col == 0 and i > 0:
-            pdf.ln(18)
+            row_y = row_y + 18
+            pdf.set_y(row_y)
         x = LM + col * (bw + 2)
-        y = pdf.get_y()
         sub_color = GREEN if item.get("positive") else RED if item.get("negative") else MUTED
-        _stat_box(pdf, x, y, bw, item["label"], item["value"],
+        _stat_box(pdf, x, row_y, bw, item["label"], item["value"],
                   item.get("sub", ""), sub_color)
-    pdf.ln(20)
+    pdf.set_y(row_y + 20)
 
 
 def _embed_chart(pdf: FPDF, img_bytes: bytes, w: float = W, label: str = ""):
