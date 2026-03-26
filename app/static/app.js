@@ -265,9 +265,7 @@ async function renderClientView() {
         <h2>${esc(c.client_name)}</h2>
         <div class="subtitle">${esc(c.filename)} &middot; ${esc(c.base_currency)}</div>
       </div>
-      <button class="btn-export" id="pdfExportBtn" onclick="exportPDF('${esc(c.filename)}')">
-        &#128462; PDF Export
-      </button>
+      <button class="btn-export" id="pdfExportBtn" onclick="exportPDF('${esc(c.filename)}')">PDF Export</button>
     </div>
     <div class="tabs">${tabs.map(([id,lbl])=>`<div class="tab ${currentTab===id?'active':''}" onclick="switchTab('${id}')">${lbl}</div>`).join("")}</div>
     <div id="tabContent"></div>`;
@@ -650,7 +648,7 @@ function fmtCHF(n) {
 // ════════════════════════════════════════
 async function exportPDF(filename) {
   const btn = document.getElementById("pdfExportBtn");
-  if (btn) { btn.classList.add("loading"); btn.textContent = "⏳ Wird erstellt..."; }
+  if (btn) { btn.classList.add("loading"); btn.textContent = "Wird erstellt..."; }
   try {
     const resp = await fetch(`/api/export/${encodeURIComponent(filename)}/pdf`);
     if (!resp.ok) {
@@ -667,7 +665,7 @@ async function exportPDF(filename) {
   } catch (e) {
     alert(`Fehler beim PDF-Export: ${e.message}`);
   } finally {
-    if (btn) { btn.classList.remove("loading"); btn.innerHTML = "&#128462; PDF Export"; }
+    if (btn) { btn.classList.remove("loading"); btn.textContent = "PDF Export"; }
   }
 }
 

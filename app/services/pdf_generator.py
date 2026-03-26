@@ -42,7 +42,7 @@ def _pct(n: float, d: int = 1) -> str:
 
 def _fig_to_b64(fig) -> str:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150, facecolor=fig.get_facecolor())
+    fig.savefig(buf, format="png", dpi=150, facecolor=fig.get_facecolor())
     buf.seek(0)
     data = base64.b64encode(buf.read()).decode()
     plt.close(fig)
@@ -227,21 +227,16 @@ tr:last-child td { border-bottom: none; }
 .hm-table .yr { text-align: right; font-weight: 600; color: #64748b; padding-right: 6px; }
 
 .footer {
-  position: fixed; bottom: 0.5cm; left: 1.8cm; right: 1.8cm;
   font-size: 6.5pt; color: #94a3b8;
   display: flex; justify-content: space-between;
   border-top: 1px solid #e2e8f0; padding-top: 3px;
+  margin-top: 20px;
 }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 .confidential { font-size: 7pt; color: #94a3b8; text-align: center; margin-top: 10px; font-style: italic; }
 </style>
 </head>
 <body>
-
-<div class="footer">
-  <span>{{ client_name }} &mdash; Vertraulich &mdash; Nur für den Empfänger</span>
-  <span>Erstellt am {{ report_date }}</span>
-</div>
 
 {# ── PAGE 1: SUMMARY ── #}
 <div class="report-header">
@@ -544,6 +539,10 @@ tr:last-child td { border-bottom: none; }
 
 <div class="confidential">
   Dieses Dokument enthält vertrauliche Finanzinformationen und ist ausschliesslich für den genannten Empfänger bestimmt.
+</div>
+<div class="footer">
+  <span>{{ client_name }} &mdash; Vertraulich</span>
+  <span>Erstellt am {{ report_date }}</span>
 </div>
 
 </body>
