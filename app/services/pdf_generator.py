@@ -261,7 +261,7 @@ tr:last-child td { border-bottom: none; }
     <div class="stat-box">
       <div class="lbl">Gesamtvermögen</div>
       <div class="val">{{ total_value }} {{ base_currency }}</div>
-      <div class="sub {{ 'pos' if gain_loss >= 0 else 'neg' }}">{{ gain_loss_pct }} ({{ gain_loss }} {{ base_currency }})</div>
+      <div class="sub {{ 'pos' if gain_loss_positive else 'neg' }}">{{ gain_loss_pct }} ({{ gain_loss }} {{ base_currency }})</div>
     </div>
     <div class="stat-box">
       <div class="lbl">Investiert</div>
@@ -269,7 +269,7 @@ tr:last-child td { border-bottom: none; }
     </div>
     <div class="stat-box">
       <div class="lbl">Gewinn / Verlust</div>
-      <div class="val {{ 'pos' if gain_loss >= 0 else 'neg' }}">{{ gain_loss }} {{ base_currency }}</div>
+      <div class="val {{ 'pos' if gain_loss_positive else 'neg' }}">{{ gain_loss }} {{ base_currency }}</div>
     </div>
     <div class="stat-box">
       <div class="lbl">Rendite p.a.</div>
@@ -450,7 +450,7 @@ tr:last-child td { border-bottom: none; }
         <td colspan="4">Total</td>
         <td class="text-right mono">{{ total_value }} {{ base_currency }}</td>
         <td class="text-right mono">{{ total_invested }} {{ base_currency }}</td>
-        <td class="text-right mono {{ 'pos' if gain_loss >= 0 else 'neg' }}">{{ gain_loss_pct }}</td>
+        <td class="text-right mono {{ 'pos' if gain_loss_positive else 'neg' }}">{{ gain_loss_pct }}</td>
       </tr>
     </tbody>
   </table>
@@ -645,6 +645,7 @@ def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) 
         total_value=_chf(client.total_value),
         total_invested=_chf(client.total_invested),
         gain_loss=_chf(client.gain_loss),
+        gain_loss_positive=client.gain_loss >= 0,
         gain_loss_pct=_pct(client.gain_loss_pct),
         annual_return=p.annual_return,
         annual_return_fmt=_pct(p.annual_return),
