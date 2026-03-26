@@ -36,6 +36,33 @@ CHART_COLORS = [
 
 # ── Formatters ────────────────────────────────────────────────────────────────
 
+_UNICODE_REPLACEMENTS = {
+    "\u2013": "-", "\u2014": "-", "\u2212": "-",
+    "\u2018": "'", "\u2019": "'",
+    "\u201c": '"', "\u201d": '"',
+    "\u2026": "...",
+}
+
+def _s(text: str) -> str:
+    """Sanitize text: replace chars outside Latin-1 range (>255) for fpdf2 built-in fonts."""
+    result = []
+    for ch in str(text):
+        if ord(ch) <= 255:
+            result.append(ch)
+        else:
+            result.append(_UNICODE_REPLACEMENTS.get(ch, "?"))
+    return "".join(result)
+
+
+class SafeFPDF(FPDF):
+    """FPDF subclass that auto-sanitizes all text passed to cell/multi_cell."""
+    def cell(self, w=0, h=0, txt="", border=0, ln=0, align="", fill=False, link="", **kw):
+        return super().cell(w, h, _s(txt), border=border, ln=ln, align=align, fill=fill, link=link, **kw)
+
+    def multi_cell(self, w, h, txt="", border=0, align="J", fill=False, **kw):
+        return super().multi_cell(w, h, _s(txt), border=border, align=align, fill=fill, **kw)
+
+
 def _chf(n: float, d: int = 2) -> str:
     parts = f"{abs(n):,.{d}f}".split(".")
     parts[0] = parts[0].replace(",", "'")
@@ -356,7 +383,7 @@ def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) 
     heatmap_years = sorted(monthly_by_year.keys(), reverse=True)[:5]
 
     # ── Setup PDF ──
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf = SafeFPDF(orientation="P", unit="mm", format="A4")
     pdf.set_margins(LM, 15, LM)
     pdf.set_auto_page_break(True, margin=15)
 
