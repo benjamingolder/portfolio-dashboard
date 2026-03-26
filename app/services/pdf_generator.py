@@ -1,10 +1,9 @@
-"""PDF report generator for portfolio clients.
+"""PDF report generator using fpdf2 + Matplotlib.
 
-Uses WeasyPrint (HTML→PDF) and Matplotlib (server-side charts as embedded PNG).
+Pure Python, no system dependencies (no WeasyPrint/Cairo/Pango needed).
 """
 from __future__ import annotations
 
-import base64
 import io
 import logging
 from pathlib import Path
@@ -12,22 +11,32 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from jinja2 import Environment, BaseLoader
+
+from fpdf import FPDF
 
 from app.models.portfolio import ClientPortfolio
 
 logger = logging.getLogger(__name__)
 
+# ── Palette ───────────────────────────────────────────────────────────────────
+ACCENT   = (79,  140, 255)
+GREEN    = (22,  163, 74)
+RED      = (220, 38,  38)
+DARK     = (15,  23,  42)
+MUTED    = (100, 116, 139)
+LIGHT_BG = (248, 250, 252)
+BORDER   = (226, 232, 240)
+WHITE    = (255, 255, 255)
+
 CHART_COLORS = [
-    "#4f8cff", "#22c55e", "#ef4444", "#eab308", "#a855f7",
-    "#06b6d4", "#f97316", "#ec4899", "#14b8a6", "#8b5cf6",
-    "#f59e0b", "#3b82f6", "#10b981", "#f43f5e", "#6366f1",
+    "#4f8cff","#22c55e","#ef4444","#eab308","#a855f7",
+    "#06b6d4","#f97316","#ec4899","#14b8a6","#8b5cf6",
+    "#f59e0b","#3b82f6","#10b981","#f43f5e","#6366f1",
 ]
 
-# ── Formatting helpers ────────────────────────────────────────────────────────
+# ── Formatters ────────────────────────────────────────────────────────────────
 
 def _chf(n: float, d: int = 2) -> str:
-    """Format number with Swiss apostrophe thousands separator."""
     parts = f"{abs(n):,.{d}f}".split(".")
     parts[0] = parts[0].replace(",", "'")
     result = ".".join(parts)
@@ -38,45 +47,40 @@ def _pct(n: float, d: int = 1) -> str:
     return f"{'+' if n > 0 else ''}{n:.{d}f}%"
 
 
-# ── Chart generators ──────────────────────────────────────────────────────────
+# ── Chart generators → PNG bytes ──────────────────────────────────────────────
 
-def _fig_to_b64(fig) -> str:
+def _fig_to_bytes(fig) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, facecolor=fig.get_facecolor())
     buf.seek(0)
-    data = base64.b64encode(buf.read()).decode()
+    data = buf.read()
     plt.close(fig)
-    return f"data:image/png;base64,{data}"
+    return data
 
 
-def _pie_chart(labels: list[str], values: list[float], colors: list[str]) -> str:
+def _pie_chart(labels, values, colors) -> bytes | None:
     pairs = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
     if not pairs:
-        return ""
+        return None
     lbl, val, col = zip(*pairs)
-    fig, ax = plt.subplots(figsize=(6, 3.8), facecolor="white")
+    fig, ax = plt.subplots(figsize=(6, 3.5), facecolor="white")
     wedges, _, autotexts = ax.pie(
         val, colors=col,
         autopct=lambda p: f"{p:.1f}%" if p > 3 else "",
         startangle=90, pctdistance=0.78,
     )
     for at in autotexts:
-        at.set_fontsize(7)
-        at.set_color("white")
-        at.set_weight("bold")
-    ax.legend(
-        wedges, [l[:28] for l in lbl],
-        loc="center left", bbox_to_anchor=(1, 0.5),
-        fontsize=8, frameon=False,
-    )
+        at.set_fontsize(7); at.set_color("white"); at.set_weight("bold")
+    ax.legend(wedges, [l[:26] for l in lbl],
+              loc="center left", bbox_to_anchor=(1, 0.5), fontsize=8, frameon=False)
     fig.tight_layout()
-    return _fig_to_b64(fig)
+    return _fig_to_bytes(fig)
 
 
-def _line_chart(dates: list[str], values: list[float], currency: str) -> str:
+def _line_chart(dates, values, currency) -> bytes | None:
     if not dates or not values:
-        return ""
-    fig, ax = plt.subplots(figsize=(10, 3.2), facecolor="white")
+        return None
+    fig, ax = plt.subplots(figsize=(10, 3.0), facecolor="white")
     ax.plot(range(len(dates)), values, color="#4f8cff", linewidth=1.5)
     ax.fill_between(range(len(dates)), values, alpha=0.08, color="#4f8cff")
     n = len(dates)
@@ -91,13 +95,13 @@ def _line_chart(dates: list[str], values: list[float], currency: str) -> str:
         ax.spines[spine].set_visible(False)
     ax.grid(axis="y", alpha=0.25, color="#cbd5e1")
     fig.tight_layout()
-    return _fig_to_b64(fig)
+    return _fig_to_bytes(fig)
 
 
-def _bar_chart_years(years: list, amounts: list[float]) -> str:
+def _bar_chart_years(years, amounts) -> bytes | None:
     if not years:
-        return ""
-    fig, ax = plt.subplots(figsize=(7, 3), facecolor="white")
+        return None
+    fig, ax = plt.subplots(figsize=(7, 2.8), facecolor="white")
     ax.bar(range(len(years)), amounts, color="#22c55e", alpha=0.85)
     ax.set_xticks(range(len(years)))
     ax.set_xticklabels([str(y) for y in years], fontsize=9)
@@ -107,20 +111,20 @@ def _bar_chart_years(years: list, amounts: list[float]) -> str:
         ax.spines[spine].set_visible(False)
     ax.grid(axis="y", alpha=0.25, color="#cbd5e1")
     fig.tight_layout()
-    return _fig_to_b64(fig)
+    return _fig_to_bytes(fig)
 
 
-def _hbar_chart(labels: list[str], values: list[float], invested: list[float]) -> str:
+def _hbar_chart(labels, values, invested) -> bytes | None:
     n = min(len(labels), 15)
     if not n:
-        return ""
+        return None
     lbl, val, inv = labels[:n], values[:n], invested[:n]
     fig, ax = plt.subplots(figsize=(10, max(3, n * 0.42)), facecolor="white")
     y = range(n)
     ax.barh([i + 0.22 for i in y], val, 0.4, label="Aktuell", color="#4f8cff", alpha=0.85)
     ax.barh([i - 0.22 for i in y], inv, 0.4, label="Investiert", color="#94a3b8", alpha=0.75)
     ax.set_yticks(list(y))
-    ax.set_yticklabels([l[:32] for l in lbl], fontsize=8)
+    ax.set_yticklabels([l[:30] for l in lbl], fontsize=8)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}".replace(",", "'")))
     ax.tick_params(axis="x", labelsize=8)
     for spine in ["top", "right"]:
@@ -128,563 +132,418 @@ def _hbar_chart(labels: list[str], values: list[float], invested: list[float]) -
     ax.grid(axis="x", alpha=0.25, color="#cbd5e1")
     ax.legend(fontsize=8, frameon=False)
     fig.tight_layout()
-    return _fig_to_b64(fig)
+    return _fig_to_bytes(fig)
 
 
-# ── Logo helper ───────────────────────────────────────────────────────────────
+# ── fpdf2 layout helpers ──────────────────────────────────────────────────────
 
-def _logo_src(logo_path: Path | None) -> str:
-    if not logo_path or not logo_path.exists():
-        return ""
-    ext = logo_path.suffix.lower().lstrip(".")
-    mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "gif": "gif", "svg": "svg+xml"}.get(ext, "png")
-    data = base64.b64encode(logo_path.read_bytes()).decode()
-    return f"data:image/{mime};base64,{data}"
+W = 174   # content width mm (A4 210 - 2*18 margins)
+LM = 18   # left margin
 
 
-# ── Heatmap color (matches JS logic) ─────────────────────────────────────────
+def _header(pdf: FPDF, title: str, subtitle: str, date_str: str, logo_path: Path | None):
+    """Draw page header with blue rule and optional logo."""
+    # Logo top-right
+    if logo_path and logo_path.exists():
+        try:
+            pdf.image(str(logo_path), x=LM + W - 40, y=pdf.get_y(), w=40, h=14, keep_aspect_ratio=True)
+        except Exception:
+            pass
 
-def _heatmap_color(v: float) -> str:
-    if v is None:
-        return "transparent"
-    if v > 5:   return "rgba(22,163,74,0.80)"
-    if v > 2:   return "rgba(22,163,74,0.55)"
-    if v > 0:   return "rgba(22,163,74,0.25)"
-    if v > -2:  return "rgba(220,38,38,0.25)"
-    if v > -5:  return "rgba(220,38,38,0.55)"
-    return "rgba(220,38,38,0.80)"
-
-
-# ── Jinja2 template ───────────────────────────────────────────────────────────
-
-_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-@page {
-  size: A4;
-  margin: 1.5cm 1.8cm 2cm 1.8cm;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family: Helvetica, Arial, sans-serif; font-size: 9.5pt; color: #1e293b; line-height:1.4; }
-
-.report-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  border-bottom: 2px solid #4f8cff;
-  padding-bottom: 10px;
-  margin-bottom: 18px;
-}
-.header-left h1 { font-size: 17pt; font-weight: 700; color: #0f172a; margin-bottom: 3px; }
-.header-left .subtitle { font-size: 9pt; color: #64748b; }
-.header-left .report-date { font-size: 8pt; color: #94a3b8; margin-top: 3px; }
-.header-right img { max-height: 56px; max-width: 160px; object-fit: contain; }
-
-.section { margin-bottom: 20px; }
-.section-title {
-  font-size: 10pt; font-weight: 600; color: #0f172a;
-  border-left: 3px solid #4f8cff;
-  padding-left: 8px;
-  margin-bottom: 10px;
-}
-
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-.stat-box {
-  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 9px 11px;
-}
-.stat-box .lbl { font-size: 6.5pt; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-.stat-box .val { font-size: 13pt; font-weight: 700; color: #0f172a; line-height:1.2; }
-.stat-box .sub { font-size: 7.5pt; margin-top: 2px; }
-
-.pos { color: #16a34a; }
-.neg { color: #dc2626; }
-.neu { color: #475569; }
-
-table { width: 100%; border-collapse: collapse; font-size: 8pt; }
-th {
-  text-align: left; padding: 4px 7px;
-  background: #f1f5f9; border-bottom: 1px solid #cbd5e1;
-  font-size: 7pt; font-weight: 600; color: #475569;
-  text-transform: uppercase; letter-spacing: 0.3px;
-}
-td { padding: 4px 7px; border-bottom: 1px solid #f1f5f9; }
-tr:last-child td { border-bottom: none; }
-.tr-total td { font-weight: 700; background: #f1f5f9; border-top: 1px solid #cbd5e1; }
-.text-right { text-align: right; }
-.mono { font-family: 'Courier New', monospace; }
-
-.chart-img { width: 100%; }
-.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-
-.page-break { page-break-before: always; }
-
-.hm-table { border-collapse: collapse; font-size: 7pt; width: 100%; }
-.hm-table th, .hm-table td { padding: 3px 2px; text-align: center; border: 1px solid #e2e8f0; min-width: 26px; }
-.hm-table th { background: #f1f5f9; font-size: 6.5pt; }
-.hm-table .yr { text-align: right; font-weight: 600; color: #64748b; padding-right: 6px; }
-
-.footer {
-  font-size: 6.5pt; color: #94a3b8;
-  display: flex; justify-content: space-between;
-  border-top: 1px solid #e2e8f0; padding-top: 3px;
-  margin-top: 20px;
-}
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-.confidential { font-size: 7pt; color: #94a3b8; text-align: center; margin-top: 10px; font-style: italic; }
-</style>
-</head>
-<body>
-
-{# ── PAGE 1: SUMMARY ── #}
-<div class="report-header">
-  <div class="header-left">
-    <h1>{{ client_name }}</h1>
-    <div class="subtitle">Vermögensübersicht &middot; {{ base_currency }}</div>
-    <div class="report-date">Berichtsdatum: {{ report_date }}</div>
-  </div>
-  <div class="header-right">
-    {% if logo_src %}<img src="{{ logo_src }}" alt="Logo">{% endif %}
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-title">Kennzahlen im Überblick</div>
-  <div class="stats-grid">
-    <div class="stat-box">
-      <div class="lbl">Gesamtvermögen</div>
-      <div class="val">{{ total_value }} {{ base_currency }}</div>
-      <div class="sub {{ 'pos' if gain_loss_positive else 'neg' }}">{{ gain_loss_pct }} ({{ gain_loss }} {{ base_currency }})</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Investiert</div>
-      <div class="val">{{ total_invested }} {{ base_currency }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Gewinn / Verlust</div>
-      <div class="val {{ 'pos' if gain_loss_positive else 'neg' }}">{{ gain_loss }} {{ base_currency }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Rendite p.a.</div>
-      <div class="val {{ 'pos' if annual_return >= 0 else 'neg' }}">{{ annual_return_fmt }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">TTWROR (Gesamtrendite)</div>
-      <div class="val {{ 'pos' if ttwror >= 0 else 'neg' }}">{{ ttwror_fmt }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">YTD</div>
-      <div class="val {{ 'pos' if ytd >= 0 else 'neg' }}">{{ ytd_fmt }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Volatilität</div>
-      <div class="val neu">{{ volatility_fmt }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Sharpe Ratio</div>
-      <div class="val neu">{{ sharpe_fmt }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Max. Drawdown</div>
-      <div class="val neg">{{ max_drawdown_fmt }}</div>
-    </div>
-  </div>
-</div>
-
-{% if alloc_chart %}
-<div class="section">
-  <div class="section-title">Asset Allocation</div>
-  <div class="two-col">
-    <img class="chart-img" src="{{ alloc_chart }}">
-    <table>
-      <thead><tr><th>Kategorie</th><th class="text-right">Wert ({{ base_currency }})</th><th class="text-right">Anteil</th></tr></thead>
-      <tbody>
-        {% for a in asset_allocation %}
-        <tr>
-          <td><span class="dot" style="background:{{ a.color }}"></span>{{ a.name }}</td>
-          <td class="text-right mono">{{ a.value_fmt }}</td>
-          <td class="text-right mono">{{ a.pct_fmt }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
-
-{% if dividends_total > 0 %}
-<div class="stats-grid" style="margin-top:-8px">
-  <div class="stat-box">
-    <div class="lbl">Dividenden Total</div>
-    <div class="val pos">{{ dividends_total_fmt }} {{ base_currency }}</div>
-  </div>
-  <div class="stat-box">
-    <div class="lbl">Dividendenrendite</div>
-    <div class="val pos">{{ dividend_yield_fmt }}</div>
-  </div>
-  <div class="stat-box">
-    <div class="lbl">Dividendenquellen</div>
-    <div class="val neu">{{ dividend_sources }}</div>
-  </div>
-</div>
-{% endif %}
+    pdf.set_text_color(*DARK)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 8, title, ln=True)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(0, 5, subtitle, ln=True)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.cell(0, 4, f"Berichtsdatum: {date_str}", ln=True)
+    pdf.ln(1)
+    # Blue rule
+    pdf.set_draw_color(*ACCENT)
+    pdf.set_line_width(0.5)
+    pdf.line(LM, pdf.get_y(), LM + W, pdf.get_y())
+    pdf.ln(4)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(0.2)
 
 
-{# ── PAGE 2: PERFORMANCE ── #}
-<div class="page-break"></div>
-
-<div class="report-header">
-  <div class="header-left">
-    <h1>Performance</h1>
-    <div class="subtitle">{{ client_name }}</div>
-  </div>
-  <div class="header-right">
-    {% if logo_src %}<img src="{{ logo_src }}" alt="Logo">{% endif %}
-  </div>
-</div>
-
-{% if value_history_chart %}
-<div class="section">
-  <div class="section-title">Portfoliowert-Entwicklung</div>
-  <img class="chart-img" src="{{ value_history_chart }}">
-</div>
-{% endif %}
-
-<div class="section">
-  <div class="section-title">Renditen im Vergleich</div>
-  <div class="stats-grid">
-    <div class="stat-box"><div class="lbl">YTD</div><div class="val {{ 'pos' if ytd >= 0 else 'neg' }}">{{ ytd_fmt }}</div></div>
-    <div class="stat-box"><div class="lbl">1 Jahr</div><div class="val {{ 'pos' if r1y >= 0 else 'neg' }}">{{ r1y_fmt }}</div></div>
-    <div class="stat-box"><div class="lbl">3 Jahre p.a.</div><div class="val {{ 'pos' if r3y >= 0 else 'neg' }}">{{ r3y_fmt }}</div></div>
-    <div class="stat-box"><div class="lbl">5 Jahre p.a.</div><div class="val {{ 'pos' if r5y >= 0 else 'neg' }}">{{ r5y_fmt }}</div></div>
-    <div class="stat-box"><div class="lbl">Rendite p.a.</div><div class="val {{ 'pos' if annual_return >= 0 else 'neg' }}">{{ annual_return_fmt }}</div></div>
-    <div class="stat-box"><div class="lbl">Volatilität</div><div class="val neu">{{ volatility_fmt }}</div></div>
-  </div>
-</div>
-
-{% if monthly_by_year %}
-<div class="section">
-  <div class="section-title">Monatliche Renditen (Heatmap)</div>
-  <table class="hm-table">
-    <thead>
-      <tr>
-        <th style="text-align:right">Jahr</th>
-        <th>Jan</th><th>Feb</th><th>Mär</th><th>Apr</th><th>Mai</th><th>Jun</th>
-        <th>Jul</th><th>Aug</th><th>Sep</th><th>Okt</th><th>Nov</th><th>Dez</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for year in monthly_years %}
-      <tr>
-        <td class="yr">{{ year }}</td>
-        {% for m in range(1, 13) %}
-        {% set v = monthly_by_year[year].get(m) %}
-        {% if v is not none %}
-        <td style="background:{{ hmc(v) }};color:{% if v|abs > 2 %}#fff{% else %}#1e293b{% endif %}">{{ '+' if v > 0 else '' }}{{ '%.1f'|format(v) }}</td>
-        {% else %}
-        <td></td>
-        {% endif %}
-        {% endfor %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
+def _section(pdf: FPDF, title: str):
+    """Draw a section title with blue left border."""
+    y = pdf.get_y()
+    pdf.set_fill_color(*ACCENT)
+    pdf.rect(LM, y, 2, 5, style="F")
+    pdf.set_xy(LM + 4, y)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*DARK)
+    pdf.cell(0, 5, title, ln=True)
+    pdf.ln(2)
 
 
-{# ── PAGE 3: POSITIONS ── #}
-<div class="page-break"></div>
-
-<div class="report-header">
-  <div class="header-left">
-    <h1>Positionen</h1>
-    <div class="subtitle">{{ client_name }}</div>
-  </div>
-  <div class="header-right">
-    {% if logo_src %}<img src="{{ logo_src }}" alt="Logo">{% endif %}
-  </div>
-</div>
-
-{% if holdings_chart %}
-<div class="section">
-  <div class="section-title">Wert vs. Investiert</div>
-  <img class="chart-img" src="{{ holdings_chart }}">
-</div>
-{% endif %}
-
-<div class="section">
-  <div class="section-title">Alle Positionen ({{ holdings|length }})</div>
-  <table>
-    <thead>
-      <tr>
-        <th>Wertpapier</th>
-        <th>ISIN</th>
-        <th>Kategorie</th>
-        <th class="text-right">Anteile</th>
-        <th class="text-right">Wert ({{ base_currency }})</th>
-        <th class="text-right">Investiert</th>
-        <th class="text-right">G/V %</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for h in holdings %}
-      <tr>
-        <td>{{ h.name }}</td>
-        <td style="color:#64748b;font-size:7pt">{{ h.isin or '—' }}</td>
-        <td style="color:#64748b">{{ h.category }}</td>
-        <td class="text-right mono">{{ h.shares }}</td>
-        <td class="text-right mono">{{ h.value }}</td>
-        <td class="text-right mono">{{ h.invested }}</td>
-        <td class="text-right mono {{ 'pos' if h.gain_pct_raw >= 0 else 'neg' }}">{{ h.gain_pct }}</td>
-      </tr>
-      {% endfor %}
-      <tr class="tr-total">
-        <td colspan="4">Total</td>
-        <td class="text-right mono">{{ total_value }} {{ base_currency }}</td>
-        <td class="text-right mono">{{ total_invested }} {{ base_currency }}</td>
-        <td class="text-right mono {{ 'pos' if gain_loss_positive else 'neg' }}">{{ gain_loss_pct }}</td>
-      </tr>
-    </tbody>
-  </table>
-</div>
-
-{% if cash_accounts %}
-<div class="section">
-  <div class="section-title">Cash-Bestände</div>
-  <table>
-    <thead><tr><th>Konto</th><th>Währung</th><th class="text-right">Saldo</th></tr></thead>
-    <tbody>
-      {% for a in cash_accounts %}
-      <tr><td>{{ a.name }}</td><td>{{ a.currency }}</td><td class="text-right mono">{{ a.balance_fmt }}</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
+def _stat_box(pdf: FPDF, x: float, y: float, w: float, label: str, value: str,
+              sub: str = "", sub_color: tuple = MUTED):
+    """Draw a single KPI stat box."""
+    h = 16
+    pdf.set_fill_color(*LIGHT_BG)
+    pdf.set_draw_color(*BORDER)
+    pdf.rect(x, y, w, h, style="FD")
+    # Label
+    pdf.set_xy(x + 2, y + 2)
+    pdf.set_font("Helvetica", "", 6)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(w - 4, 3, label.upper(), ln=True)
+    # Value
+    pdf.set_xy(x + 2, y + 5.5)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*DARK)
+    # Truncate value if too long
+    while pdf.get_string_width(value) > w - 4 and len(value) > 4:
+        value = value[:-1]
+    pdf.cell(w - 4, 5, value, ln=True)
+    # Sub
+    if sub:
+        pdf.set_xy(x + 2, y + 11)
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*sub_color)
+        pdf.cell(w - 4, 3, sub, ln=True)
 
 
-{# ── PAGE 4: DIVIDENDS (only if relevant) ── #}
-{% if dividends_total > 0 %}
-<div class="page-break"></div>
-
-<div class="report-header">
-  <div class="header-left">
-    <h1>Dividenden</h1>
-    <div class="subtitle">{{ client_name }}</div>
-  </div>
-  <div class="header-right">
-    {% if logo_src %}<img src="{{ logo_src }}" alt="Logo">{% endif %}
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-title">Dividenden-Übersicht</div>
-  <div class="stats-grid">
-    <div class="stat-box">
-      <div class="lbl">Dividenden Total</div>
-      <div class="val pos">{{ dividends_total_fmt }} {{ base_currency }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Dividendenrendite</div>
-      <div class="val pos">{{ dividend_yield_fmt }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="lbl">Anzahl Quellen</div>
-      <div class="val neu">{{ dividend_sources }}</div>
-    </div>
-  </div>
-</div>
-
-{% if div_year_chart %}
-<div class="section">
-  <div class="section-title">Dividenden pro Jahr</div>
-  <img class="chart-img" src="{{ div_year_chart }}">
-</div>
-{% endif %}
-
-{% if div_by_year or div_by_security %}
-<div class="section">
-  <div class="section-title">Detailübersicht</div>
-  <div class="two-col">
-    {% if div_by_year %}
-    <table>
-      <thead><tr><th>Jahr</th><th class="text-right">Betrag ({{ base_currency }})</th></tr></thead>
-      <tbody>
-        {% for year, amt in div_by_year %}
-        <tr><td>{{ year }}</td><td class="text-right mono pos">{{ amt }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-    {% if div_by_security %}
-    <table>
-      <thead><tr><th>Wertpapier</th><th class="text-right">Total ({{ base_currency }})</th></tr></thead>
-      <tbody>
-        {% for name, amt in div_by_security %}
-        <tr>
-          <td style="font-size:7.5pt">{{ name[:36] }}</td>
-          <td class="text-right mono pos">{{ amt }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-{% endif %}
-
-<div class="confidential">
-  Dieses Dokument enthält vertrauliche Finanzinformationen und ist ausschliesslich für den genannten Empfänger bestimmt.
-</div>
-<div class="footer">
-  <span>{{ client_name }} &mdash; Vertraulich</span>
-  <span>Erstellt am {{ report_date }}</span>
-</div>
-
-</body>
-</html>
-"""
+def _stats_grid(pdf: FPDF, items: list[dict]):
+    """Draw a 3-column grid of stat boxes."""
+    bw = (W - 4) / 3  # box width
+    for i, item in enumerate(items):
+        col = i % 3
+        if col == 0 and i > 0:
+            pdf.ln(18)
+        x = LM + col * (bw + 2)
+        y = pdf.get_y()
+        sub_color = GREEN if item.get("positive") else RED if item.get("negative") else MUTED
+        _stat_box(pdf, x, y, bw, item["label"], item["value"],
+                  item.get("sub", ""), sub_color)
+    pdf.ln(20)
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+def _embed_chart(pdf: FPDF, img_bytes: bytes, w: float = W, label: str = ""):
+    """Embed a matplotlib PNG chart."""
+    if label:
+        _section(pdf, label)
+    pdf.image(io.BytesIO(img_bytes), x=LM, w=w)
+    pdf.ln(3)
+
+
+def _table_header(pdf: FPDF, headers: list[str], widths: list[float], aligns: list[str]):
+    pdf.set_fill_color(*LIGHT_BG)
+    pdf.set_draw_color(*BORDER)
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_text_color(*MUTED)
+    for h, w, a in zip(headers, widths, aligns):
+        pdf.cell(w, 5, h.upper(), border="B", align=a, fill=True)
+    pdf.ln()
+
+
+def _table_row(pdf: FPDF, cells: list[str], widths: list[float], aligns: list[str],
+               colors: list[tuple] | None = None):
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_draw_color(*BORDER)
+    for i, (cell, w, a) in enumerate(zip(cells, widths, aligns)):
+        color = colors[i] if colors and i < len(colors) else DARK
+        pdf.set_text_color(*color)
+        # Truncate if needed
+        while pdf.get_string_width(cell) > w - 1 and len(cell) > 3:
+            cell = cell[:-1]
+        pdf.cell(w, 4.5, cell, border="B", align=a)
+    pdf.ln()
+
+
+def _heatmap_color(v: float) -> tuple[int, int, int]:
+    if v > 5:   return (22, 163, 74)
+    if v > 2:   return (74, 197, 130)
+    if v > 0:   return (187, 237, 206)
+    if v > -2:  return (252, 194, 194)
+    if v > -5:  return (237, 100, 100)
+    return (220, 38, 38)
+
+
+def _draw_heatmap(pdf: FPDF, monthly_by_year: dict, years: list):
+    """Draw the monthly returns heatmap as colored cells."""
+    MONTHS = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"]
+    yr_w = 10
+    cell_w = (W - yr_w) / 12
+    cell_h = 5
+
+    pdf.set_font("Helvetica", "B", 6)
+    pdf.set_text_color(*MUTED)
+    pdf.set_fill_color(*LIGHT_BG)
+    # Header row
+    pdf.cell(yr_w, cell_h, "", border=0, fill=True)
+    for m in MONTHS:
+        pdf.cell(cell_w, cell_h, m, border=0, align="C", fill=True)
+    pdf.ln()
+
+    for year in years:
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_text_color(*MUTED)
+        pdf.set_fill_color(*LIGHT_BG)
+        pdf.cell(yr_w, cell_h, str(year), border=0, align="R", fill=True)
+        month_data = monthly_by_year.get(year, {})
+        for m in range(1, 13):
+            v = month_data.get(m)
+            if v is not None:
+                r, g, b = _heatmap_color(v)
+                pdf.set_fill_color(r, g, b)
+                text_color = WHITE if abs(v) > 2 else DARK
+                pdf.set_text_color(*text_color)
+                pdf.set_font("Helvetica", "", 6)
+                pdf.cell(cell_w, cell_h, f"{'+' if v > 0 else ''}{v:.1f}", border=0, align="C", fill=True)
+            else:
+                pdf.set_fill_color(*LIGHT_BG)
+                pdf.cell(cell_w, cell_h, "", border=0, fill=True)
+        pdf.ln()
+    pdf.ln(3)
+
+
+# ── Main PDF generation ───────────────────────────────────────────────────────
 
 def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) -> bytes:
-    """Generate a multi-page PDF report for a single client portfolio."""
-    from weasyprint import HTML
-
+    """Generate a multi-page A4 PDF report for a single client."""
     from datetime import date
-    report_date = date.today().strftime("%d.%m.%Y")
-
+    date_str = date.today().strftime("%d.%m.%Y")
     p = client.performance
 
-    # --- Charts ---
-    alloc_chart = ""
+    # ── Pre-generate charts ──
+    alloc_bytes = None
     if client.asset_allocation:
-        alloc_chart = _pie_chart(
+        alloc_bytes = _pie_chart(
             [a.name for a in client.asset_allocation],
             [a.value for a in client.asset_allocation],
             [a.color or CHART_COLORS[i % len(CHART_COLORS)] for i, a in enumerate(client.asset_allocation)],
         )
 
-    value_history_chart = ""
+    history_bytes = None
     if client.value_history:
-        value_history_chart = _line_chart(
+        history_bytes = _line_chart(
             [v.date for v in client.value_history],
             [v.value for v in client.value_history],
             client.base_currency,
         )
 
-    holdings_chart = ""
+    holdings_bytes = None
     if client.holdings:
-        holdings_chart = _hbar_chart(
+        holdings_bytes = _hbar_chart(
             [h.security.name for h in client.holdings],
             [h.current_value for h in client.holdings],
             [h.invested for h in client.holdings],
         )
 
-    div_year_chart = ""
-    div_by_year: list[tuple] = []
-    div_by_security: list[tuple] = []
+    div_year_bytes = None
+    by_year_items: list[tuple] = []
+    by_security_items: list[tuple] = []
     if client.dividends_total > 0 and client.dividends:
-        sorted_years = sorted(client.dividends.by_year.items())
-        if sorted_years:
-            years, amounts = zip(*sorted_years)
-            div_year_chart = _bar_chart_years(list(years), list(amounts))
-            div_by_year = [(y, _chf(a)) for y, a in sorted(sorted_years, reverse=True)]
-        div_by_security = sorted(
-            [(name, _chf(amt)) for name, amt in client.dividends.by_security.items()],
-            key=lambda x: float(x[1].replace("'", "").replace(",", ".")),
-            reverse=True,
+        by_year_raw = sorted((int(k), float(v)) for k, v in client.dividends.by_year.items())
+        if by_year_raw:
+            years_list, amounts_list = zip(*by_year_raw)
+            div_year_bytes = _bar_chart_years(list(years_list), list(amounts_list))
+            by_year_items = list(reversed(by_year_raw))
+        by_security_items = sorted(
+            ((name, float(amt)) for name, amt in client.dividends.by_security.items()),
+            key=lambda x: x[1], reverse=True
         )[:12]
 
-    # Monthly returns heatmap data
+    # Monthly heatmap data
     monthly_by_year: dict[int, dict[int, float]] = {}
     for mr in client.monthly_returns:
-        monthly_by_year.setdefault(mr.year, {})[mr.month] = mr.return_pct
-    monthly_years = sorted(monthly_by_year.keys(), reverse=True)[:5]  # last 5 years
+        monthly_by_year.setdefault(int(mr.year), {})[int(mr.month)] = float(mr.return_pct)
+    heatmap_years = sorted(monthly_by_year.keys(), reverse=True)[:5]
 
-    # Holdings table data
-    holdings_rows = []
+    # ── Setup PDF ──
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(LM, 15, LM)
+    pdf.set_auto_page_break(True, margin=15)
+
+    # ════════════════════════════════════════
+    # PAGE 1: SUMMARY
+    # ════════════════════════════════════════
+    pdf.add_page()
+    _header(pdf, client.client_name,
+            f"Vermögensübersicht · {client.base_currency}", date_str, logo_path)
+
+    _section(pdf, "Kennzahlen im Überblick")
+    gain_sub = f"{_pct(client.gain_loss_pct)} ({_chf(client.gain_loss)} {client.base_currency})"
+    _stats_grid(pdf, [
+        {"label": "Gesamtvermögen",    "value": f"{_chf(client.total_value)} {client.base_currency}",
+         "sub": gain_sub, "positive": client.gain_loss >= 0, "negative": client.gain_loss < 0},
+        {"label": "Investiert",        "value": f"{_chf(client.total_invested)} {client.base_currency}"},
+        {"label": "Gewinn / Verlust",  "value": f"{_chf(client.gain_loss)} {client.base_currency}",
+         "positive": client.gain_loss >= 0, "negative": client.gain_loss < 0},
+        {"label": "Rendite p.a.",      "value": _pct(p.annual_return),
+         "positive": p.annual_return >= 0, "negative": p.annual_return < 0},
+        {"label": "TTWROR",            "value": _pct(p.ttwror),
+         "positive": p.ttwror >= 0, "negative": p.ttwror < 0},
+        {"label": "YTD",               "value": _pct(p.ytd_return),
+         "positive": p.ytd_return >= 0, "negative": p.ytd_return < 0},
+        {"label": "Volatilität",       "value": f"{p.volatility:.1f}%"},
+        {"label": "Sharpe Ratio",      "value": f"{p.sharpe_ratio:.2f}"},
+        {"label": "Max. Drawdown",     "value": f"-{p.max_drawdown:.1f}%", "negative": True},
+    ])
+
+    if client.dividends_total > 0:
+        div_yield = client.dividends_total / client.total_invested * 100 if client.total_invested else 0
+        _stats_grid(pdf, [
+            {"label": "Dividenden Total",    "value": f"{_chf(client.dividends_total)} {client.base_currency}", "positive": True},
+            {"label": "Dividendenrendite",   "value": _pct(div_yield, 2), "positive": True},
+            {"label": "Dividendenquellen",   "value": str(len(client.dividends.by_security) if client.dividends else 0)},
+        ])
+
+    if alloc_bytes:
+        _section(pdf, "Asset Allocation")
+        # Chart left, table right
+        chart_w = W * 0.52
+        table_w = W * 0.44
+        y_before = pdf.get_y()
+        pdf.image(io.BytesIO(alloc_bytes), x=LM, y=y_before, w=chart_w)
+        chart_h = chart_w * (3.5 / 6)  # approximate aspect ratio
+        # Table on right
+        tx = LM + chart_w + 4
+        pdf.set_xy(tx, y_before)
+        pdf.set_font("Helvetica", "B", 6)
+        pdf.set_text_color(*MUTED)
+        pdf.set_fill_color(*LIGHT_BG)
+        for hdr, hw, ha in zip(["Kategorie", "Wert", "Anteil"],
+                                [table_w * 0.5, table_w * 0.3, table_w * 0.2], ["L", "R", "R"]):
+            pdf.cell(hw, 4.5, hdr.upper(), border="B", align=ha, fill=True)
+        pdf.ln()
+        for a in client.asset_allocation:
+            pdf.set_xy(tx, pdf.get_y())
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*DARK)
+            name = a.name[:22]
+            pdf.cell(table_w * 0.5, 4, name, border="B")
+            pdf.set_text_color(*DARK)
+            pdf.cell(table_w * 0.3, 4, _chf(a.value), border="B", align="R")
+            pdf.cell(table_w * 0.2, 4, f"{a.percentage:.1f}%", border="B", align="R")
+            pdf.ln()
+        pdf.set_y(y_before + max(chart_h, pdf.get_y() - y_before) + 3)
+
+    # ════════════════════════════════════════
+    # PAGE 2: PERFORMANCE
+    # ════════════════════════════════════════
+    pdf.add_page()
+    _header(pdf, "Performance", client.client_name, date_str, logo_path)
+
+    if history_bytes:
+        _embed_chart(pdf, history_bytes, W, "Portfoliowert-Entwicklung")
+
+    _section(pdf, "Renditen im Vergleich")
+    _stats_grid(pdf, [
+        {"label": "YTD",       "value": _pct(p.ytd_return),    "positive": p.ytd_return >= 0,  "negative": p.ytd_return < 0},
+        {"label": "1 Jahr",    "value": _pct(p.return_1y),     "positive": p.return_1y >= 0,   "negative": p.return_1y < 0},
+        {"label": "3 Jahre",   "value": _pct(p.return_3y),     "positive": p.return_3y >= 0,   "negative": p.return_3y < 0},
+        {"label": "5 Jahre",   "value": _pct(p.return_5y),     "positive": p.return_5y >= 0,   "negative": p.return_5y < 0},
+        {"label": "Rendite p.a.", "value": _pct(p.annual_return), "positive": p.annual_return >= 0, "negative": p.annual_return < 0},
+        {"label": "Volatilität",  "value": f"{p.volatility:.1f}%"},
+    ])
+
+    if heatmap_years:
+        _section(pdf, "Monatliche Renditen")
+        _draw_heatmap(pdf, monthly_by_year, heatmap_years)
+
+    # ════════════════════════════════════════
+    # PAGE 3: POSITIONS
+    # ════════════════════════════════════════
+    pdf.add_page()
+    _header(pdf, "Positionen", client.client_name, date_str, logo_path)
+
+    if holdings_bytes:
+        _embed_chart(pdf, holdings_bytes, W, "Wert vs. Investiert")
+
+    _section(pdf, f"Alle Positionen ({len(client.holdings)})")
+    col_w = [W*0.28, W*0.14, W*0.14, W*0.1, W*0.12, W*0.12, W*0.1]
+    _table_header(pdf, ["Wertpapier", "ISIN", "Kategorie", "Anteile", "Wert", "Investiert", "G/V %"],
+                  col_w, ["L","L","L","R","R","R","R"])
     for h in client.holdings:
-        holdings_rows.append({
-            "name": h.security.name,
-            "isin": h.security.isin,
-            "category": h.category,
-            "shares": _chf(h.shares, 4),
-            "value": _chf(h.current_value),
-            "invested": _chf(h.invested),
-            "gain_pct": _pct(h.gain_loss_pct),
-            "gain_pct_raw": h.gain_loss_pct,
-        })
+        gv_color = GREEN if h.gain_loss_pct >= 0 else RED
+        _table_row(pdf,
+            [h.security.name, h.security.isin or "", h.category,
+             _chf(h.shares, 4), _chf(h.current_value), _chf(h.invested), _pct(h.gain_loss_pct)],
+            col_w, ["L","L","L","R","R","R","R"],
+            [DARK, MUTED, MUTED, DARK, DARK, DARK, gv_color])
+
+    # Total row
+    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_fill_color(*LIGHT_BG)
+    pdf.set_text_color(*DARK)
+    total_color = GREEN if client.gain_loss >= 0 else RED
+    for cell, w, a, color in [
+        ("Total", col_w[0]+col_w[1]+col_w[2]+col_w[3], "L", DARK),
+        (_chf(client.total_value), col_w[4], "R", DARK),
+        (_chf(client.total_invested), col_w[5], "R", DARK),
+        (_pct(client.gain_loss_pct), col_w[6], "R", total_color),
+    ]:
+        pdf.set_text_color(*color)
+        pdf.cell(w, 5, cell, border="T", align=a, fill=True)
+    pdf.ln(8)
 
     # Cash accounts
-    cash_accounts = [
-        {"name": a.name, "currency": a.currency, "balance_fmt": _chf(a.balance)}
-        for a in client.accounts
-        if a.balance > 0
-    ]
+    cash = [a for a in client.accounts if a.balance > 0]
+    if cash:
+        _section(pdf, "Cash-Bestände")
+        _table_header(pdf, ["Konto", "Währung", "Saldo"], [W*0.6, W*0.2, W*0.2], ["L","L","R"])
+        for a in cash:
+            _table_row(pdf, [a.name, a.currency, _chf(a.balance)],
+                       [W*0.6, W*0.2, W*0.2], ["L","L","R"])
 
-    # Dividend yield
-    dividend_yield = (client.dividends_total / client.total_invested * 100) if client.total_invested > 0 else 0
+    # ════════════════════════════════════════
+    # PAGE 4: DIVIDENDS (if any)
+    # ════════════════════════════════════════
+    if client.dividends_total > 0:
+        pdf.add_page()
+        _header(pdf, "Dividenden", client.client_name, date_str, logo_path)
 
-    env = Environment(loader=BaseLoader())
-    env.globals["hmc"] = _heatmap_color
-    template = env.from_string(_TEMPLATE)
+        div_yield = client.dividends_total / client.total_invested * 100 if client.total_invested else 0
+        _section(pdf, "Dividenden-Übersicht")
+        _stats_grid(pdf, [
+            {"label": "Dividenden Total",  "value": f"{_chf(client.dividends_total)} {client.base_currency}", "positive": True},
+            {"label": "Dividendenrendite", "value": _pct(div_yield, 2), "positive": True},
+            {"label": "Quellen",           "value": str(len(client.dividends.by_security) if client.dividends else 0)},
+        ])
 
-    html_str = template.render(
-        client_name=client.client_name,
-        base_currency=client.base_currency,
-        report_date=report_date,
-        logo_src=_logo_src(logo_path),
-        # Summary
-        total_value=_chf(client.total_value),
-        total_invested=_chf(client.total_invested),
-        gain_loss=_chf(client.gain_loss),
-        gain_loss_positive=client.gain_loss >= 0,
-        gain_loss_pct=_pct(client.gain_loss_pct),
-        annual_return=p.annual_return,
-        annual_return_fmt=_pct(p.annual_return),
-        ttwror=p.ttwror,
-        ttwror_fmt=_pct(p.ttwror),
-        ytd=p.ytd_return,
-        ytd_fmt=_pct(p.ytd_return),
-        volatility_fmt=f"{p.volatility:.1f}%",
-        sharpe_fmt=f"{p.sharpe_ratio:.2f}",
-        max_drawdown_fmt=f"-{p.max_drawdown:.1f}%",
-        r1y=p.return_1y,
-        r1y_fmt=_pct(p.return_1y),
-        r3y=p.return_3y,
-        r3y_fmt=_pct(p.return_3y),
-        r5y=p.return_5y,
-        r5y_fmt=_pct(p.return_5y),
-        dividends_total=client.dividends_total,
-        dividends_total_fmt=_chf(client.dividends_total),
-        dividend_yield_fmt=_pct(dividend_yield, 2),
-        dividend_sources=len(client.dividends.by_security) if client.dividends else 0,
-        # Charts
-        alloc_chart=alloc_chart,
-        value_history_chart=value_history_chart,
-        holdings_chart=holdings_chart,
-        div_year_chart=div_year_chart,
-        # Asset allocation table
-        asset_allocation=[
-            {"name": a.name, "color": a.color or "#4f8cff",
-             "value_fmt": _chf(a.value), "pct_fmt": f"{a.percentage:.1f}%"}
-            for a in client.asset_allocation
-        ],
-        # Holdings
-        holdings=holdings_rows,
-        cash_accounts=cash_accounts,
-        # Heatmap
-        monthly_by_year={y: monthly_by_year[y] for y in monthly_years},
-        monthly_years=monthly_years,
-        # Dividends
-        div_by_year=div_by_year,
-        div_by_security=div_by_security,
-    )
+        if div_year_bytes:
+            _embed_chart(pdf, div_year_bytes, W * 0.6, "Dividenden pro Jahr")
 
-    return HTML(string=html_str).write_pdf()
+        if by_year_items or by_security_items:
+            _section(pdf, "Detailübersicht")
+            half = W / 2 - 3
+            y0 = pdf.get_y()
+            # Left: by year
+            if by_year_items:
+                pdf.set_xy(LM, y0)
+                _table_header(pdf, ["Jahr", f"Betrag ({client.base_currency})"],
+                              [half * 0.45, half * 0.55], ["L", "R"])
+                for year, amt in by_year_items:
+                    pdf.set_xy(LM, pdf.get_y())
+                    _table_row(pdf, [str(year), _chf(float(amt))],
+                               [half * 0.45, half * 0.55], ["L", "R"],
+                               [DARK, GREEN])
+            # Right: by security
+            if by_security_items:
+                rx = LM + half + 6
+                pdf.set_xy(rx, y0)
+                _table_header(pdf, ["Wertpapier", f"Total ({client.base_currency})"],
+                              [half * 0.65, half * 0.35], ["L", "R"])
+                for name, amt in by_security_items:
+                    pdf.set_xy(rx, pdf.get_y())
+                    _table_row(pdf, [name[:28], _chf(float(amt))],
+                               [half * 0.65, half * 0.35], ["L", "R"],
+                               [DARK, GREEN])
+
+    # ── Footer on last page ──
+    pdf.set_y(-18)
+    pdf.set_draw_color(*BORDER)
+    pdf.line(LM, pdf.get_y(), LM + W, pdf.get_y())
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "I", 6.5)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(W / 2, 4, f"{client.client_name} – Vertraulich – Nur für den Empfänger")
+    pdf.cell(W / 2, 4, f"Erstellt am {date_str}", align="R")
+
+    return bytes(pdf.output())
