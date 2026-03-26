@@ -543,7 +543,7 @@ def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) 
     pdf.ln(2)
     pdf.set_font("Helvetica", "I", 6.5)
     pdf.set_text_color(*MUTED)
-    pdf.cell(W / 2, 4, f"{client.client_name} – Vertraulich – Nur für den Empfänger")
+    pdf.cell(W / 2, 4, f"{client.client_name} - Vertraulich - Nur fuer den Empfaenger")
     pdf.cell(W / 2, 4, f"Erstellt am {date_str}", align="R")
 
     return bytes(pdf.output())
