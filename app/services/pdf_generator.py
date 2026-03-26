@@ -259,6 +259,15 @@ def _embed_chart(pdf: FPDF, img_bytes: bytes, w: float = W, label: str = ""):
     pdf.ln(3)
 
 
+def _ensure_space(pdf: FPDF, h_needed: float, title: str, subtitle: str,
+                  date_str: str, logo_path: Path | None):
+    """Add a new page with header only if less than h_needed mm remain."""
+    remaining = pdf.h - pdf.b_margin - pdf.get_y()
+    if remaining < h_needed:
+        pdf.add_page()
+        _header(pdf, title, subtitle, date_str, logo_path)
+
+
 def _table_header(pdf: FPDF, headers: list[str], widths: list[float], aligns: list[str]):
     pdf.set_fill_color(*LIGHT_BG)
     pdf.set_draw_color(*BORDER)
@@ -453,14 +462,13 @@ def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) 
         pdf.set_y(y_before + max(chart_h, pdf.get_y() - y_before) + 3)
 
     # ════════════════════════════════════════
-    # PAGE 2: PERFORMANCE
+    # PERFORMANCE (neue Seite nur wenn nötig)
     # ════════════════════════════════════════
-    pdf.add_page()
-    _header(pdf, "Performance", client.client_name, date_str, logo_path)
-
     if history_bytes:
+        _ensure_space(pdf, 70, "Performance", client.client_name, date_str, logo_path)
         _embed_chart(pdf, history_bytes, W, "Portfoliowert-Entwicklung")
 
+    _ensure_space(pdf, 50, "Performance", client.client_name, date_str, logo_path)
     _section(pdf, "Renditen im Vergleich")
     _stats_grid(pdf, [
         {"label": "YTD",       "value": _pct(p.ytd_return),    "positive": p.ytd_return >= 0,  "negative": p.ytd_return < 0},
@@ -476,10 +484,9 @@ def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) 
         _draw_heatmap(pdf, monthly_by_year, heatmap_years)
 
     # ════════════════════════════════════════
-    # PAGE 3: POSITIONS
+    # POSITIONEN (neue Seite nur wenn nötig)
     # ════════════════════════════════════════
-    pdf.add_page()
-    _header(pdf, "Positionen", client.client_name, date_str, logo_path)
+    _ensure_space(pdf, 80, "Positionen", client.client_name, date_str, logo_path)
 
     if holdings_bytes:
         _embed_chart(pdf, holdings_bytes, W, "Wert vs. Investiert")
@@ -524,8 +531,7 @@ def generate_client_pdf(client: ClientPortfolio, logo_path: Path | None = None) 
     # PAGE 4: DIVIDENDS (if any)
     # ════════════════════════════════════════
     if client.dividends_total > 0:
-        pdf.add_page()
-        _header(pdf, "Dividenden", client.client_name, date_str, logo_path)
+        _ensure_space(pdf, 80, "Dividenden", client.client_name, date_str, logo_path)
 
         div_yield = client.dividends_total / client.total_invested * 100 if client.total_invested else 0
         _section(pdf, "Dividenden-Übersicht")
